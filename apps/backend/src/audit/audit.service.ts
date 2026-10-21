@@ -9,6 +9,7 @@ export interface AuditEntry {
   resource: string;
   resourceId: string;
   timestamp: string;
+  ipAddress?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -22,6 +23,7 @@ export class AuditService {
     action: AuditAction,
     resource: string,
     resourceId: string,
+    ipAddress?: string,
     metadata?: Record<string, unknown>,
   ): AuditEntry {
     const entry: AuditEntry = {
@@ -31,12 +33,14 @@ export class AuditService {
       resource,
       resourceId,
       timestamp: new Date().toISOString(),
+      ipAddress,
       metadata,
     };
 
     this.entries.push(entry);
     this.logger.log(
-      `audit: ${entry.actor} ${entry.action} ${entry.resource}#${entry.resourceId}`,
+      `audit: ${entry.actor} ${entry.action} ${entry.resource}#${entry.resourceId}` +
+        (entry.ipAddress ? ` from ${entry.ipAddress}` : ''),
     );
 
     return entry;

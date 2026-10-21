@@ -4,16 +4,81 @@ module.exports = {
   generateRobotsTxt: true,
   robotsTxtOptions: {
     policies: [
-      { userAgent: '*', allow: '/' },
-      { userAgent: '*', disallow: ['/instructor/', '/admin/', '/auth/', '/profile', '/login', '/register'] },
+      {
+        userAgent: '*',
+        allow: ['/', '/courses', '/courses/*', '/blog', '/blog/*', '/about', '/pricing', '/contact'],
+        disallow: [
+          '/admin',
+          '/admin/*',
+          '/api',
+          '/api/*',
+          '/dashboard',
+          '/dashboard/*',
+          '/profile',
+          '/profile/*',
+          '/instructor',
+          '/instructor/*',
+          '/auth',
+          '/auth/*',
+          '/login',
+          '/register',
+        ],
+      },
     ],
   },
-  exclude: ['/instructor/*', '/admin/*', '/auth/*', '/server-sitemap.xml'],
+  exclude: [
+    '/dashboard',
+    '/dashboard/*',
+    '/profile',
+    '/profile/*',
+    '/admin',
+    '/admin/*',
+    '/api',
+    '/api/*',
+    '/instructor',
+    '/instructor/*',
+    '/auth',
+    '/auth/*',
+    '/login',
+    '/register',
+    '/server-sitemap.xml',
+  ],
   transform: async (config, path) => {
+    const excludedPrefixes = [
+      '/dashboard',
+      '/profile',
+      '/admin',
+      '/api',
+      '/instructor',
+      '/auth',
+      '/login',
+      '/register',
+    ];
+
+    if (excludedPrefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))) {
+      return null;
+    }
+
+    let priority = 0.7;
+    let changefreq = 'daily';
+
+    if (path === '/') {
+      priority = 1;
+    } else if (path === '/courses' || path === '/blog') {
+      priority = 0.9;
+    } else if (path.startsWith('/courses/')) {
+      priority = 0.8;
+    } else if (path.startsWith('/blog/')) {
+      priority = 0.8;
+    } else if (['/about', '/pricing', '/contact'].includes(path)) {
+      priority = 0.6;
+      changefreq = 'weekly';
+    }
+
     return {
       loc: path,
-      changefreq: 'daily',
-      priority: path === '/' ? 1 : 0.7,
+      changefreq,
+      priority,
       lastmod: new Date().toISOString(),
     };
   },
@@ -67,6 +132,22 @@ module.exports = {
       // Ignore if courses fetch fails
     }
 
-    return result;
+    const excludedPrefixes = [
+      '/dashboard',
+      '/profile',
+      '/admin',
+      '/api',
+      '/instructor',
+      '/auth',
+      '/login',
+      '/register',
+    ];
+
+    return result.filter(
+      (entry) =>
+        !excludedPrefixes.some(
+          (prefix) => entry.loc === prefix || entry.loc.startsWith(`${prefix}/`),
+        ),
+    );
   },
 };

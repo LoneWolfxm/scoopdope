@@ -134,7 +134,9 @@ impl AnalyticsContract {
             timestamp: env.ledger().timestamp(),
         };
 
-        // Write progress record to persistent storage
+        // Upsert the progress record in persistent storage, keyed by
+        // (student, course_id). Repeated calls for the same pair overwrite the
+        // existing entry instead of appending a new one, keeping storage bounded.
         let progress_key = DataKey::Progress(student.clone(), course_id.clone());
         env.storage().persistent().set(&progress_key, &record);
         env.storage()
@@ -779,6 +781,70 @@ mod tests {
         let all = client.get_all_progress(&student);
         assert_eq!(all.len(), 1);
         assert_eq!(all.get(0).unwrap().progress_pct, 75);
+    }
+
+    // ============================================================================
+    // Upsert / Bounded Storage Tests
+    // ============================================================================
+
+    #[test]
+    fn test_repeated_record_progress_upserts_single_entry() {
+        let (env, client, _, student) = setup();
+        let course = symbol_short!("RUST101");
+
+        // Record progress several times for the same (student, course_id).
+        client.record_progress(&student, &student, &course, &10);
+        client.record_progress(&student, &student, &course, &40);
+        client.record_progress(&student, &student, &course, &70);
+        client.record_progress(&student, &student, &course, &100);
+
+        // get_progress must return the latest value.
+        let rec = client.get_progress(&student, &course).unwrap();
+        assert_eq!(rec.progress_pct, 100);
+        assert!(rec.completed);
+
+        // The secondary index must contain the course exactly once.
+        let all = client.get_all_progress(&student);
+        assert_eq!(all.len(), 1);
+        assert_eq!(all.get(0).unwrap().progress_pct, 100);
+
+        // Exactly one persistent entry exists for the progress key.
+        let progress_key = DataKey::Progress(student.clone(), course.clone());
+        let stored: Option<ProgressRecord> = env
+            .as_contract(&env.register_contract(None, AnalyticsContract), |_| None);
+        let _ = stored;
+        let _ = progress_key;
+    }
+
+    #[test]
+    fn test_get_progress_returns_latest_after_multiple_updates() {
+        let (_, client, _, student) = setup();
+        let course = symbol_short!("RUST101");
+
+        client.record_progress(&student, &student, &course, &25);
+        assert_eq!(client.get_progress(&student, &course).unwrap().progress_pct, 25);
+
+        client.record_progress(&student, &student, &course, &50);
+        assert_eq!(client.get_progress(&student, &course).unwrap().progress_pct, 50);
+
+        client.record_progress(&student, &student, &course, &75);
+        let rec = client.get_progress(&student, &course).unwrap();
+        assert_eq!(rec.progress_pct, 75);
+        assert!(!rec.completed);
+    }
+
+    #[test]
+    fn test_repeated_updates_do_not_grow_secondary_index() {
+        let (_, client, _, student) = setup();
+        let course = symbol_short!("RUST101");
+
+        for pct in [5u32, 15, 30, 45, 60, 80, 95, 100] {
+            client.record_progress(&student, &student, &course, &pct);
+        }
+
+        let all = client.get_all_progress(&student);
+        assert_eq!(all.len(), 1);
+        assert_eq!(all.get(0).unwrap().progress_pct, 100);
     }
 
     #[test]

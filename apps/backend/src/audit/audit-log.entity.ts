@@ -61,7 +61,8 @@ export class AuditLog {
   @Column({ type: 'jsonb', nullable: true })
   changes: Record<string, { from: unknown; to: unknown }> | null;
 
-  @Column({ nullable: true })
+  /** Masked source IP of the actor (last octet replaced with "*"); supports IPv6 (max 45 chars). */
+  @Column({ nullable: true, type: 'varchar', length: 45 })
   ipAddress: string | null;
 
   @Column({ nullable: true })

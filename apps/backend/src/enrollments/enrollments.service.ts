@@ -1,12 +1,17 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Enrollment } from './entities/enrollment.entity';
 import { Notification } from '../notifications/entities/notification.entity';
 import { CreateEnrollmentDto } from './dto/create-enrollment.dto';
+import { ProcessedWebhookEvent } from './entities/processed-webhook-event.entity';
 
 /** TTL for cached enrollment counts, in milliseconds. */
 const ENROLLMENT_COUNT_TTL_MS = 60_000;
+
+/** How long processed Stripe event IDs are retained before pruning. */
+const PROCESSED_WEBHOOK_EVENT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 interface CachedCount {
   value: number;
@@ -24,7 +29,69 @@ export class EnrollmentsService {
     private readonly enrollmentRepository: Repository<Enrollment>,
     @InjectRepository(Notification)
     private readonly notificationRepository: Repository<Notification>,
+    @InjectRepository(ProcessedWebhookEvent)
+    private readonly processedWebhookEventRepository: Repository<ProcessedWebhookEvent>,
   ) {}
+
+  /**
+   * Record a Stripe webhook event as processed.
+   *
+   * Returns `true` when this is the first delivery of the event (the caller
+   * should process it), or `false` when the event ID was already recorded
+   * (a duplicate delivery that must be skipped).
+   */
+  async tryMarkWebhookEventProcessed(eventId: string): Promise<boolean> {
+    try {
+      await this.processedWebhookEventRepository.insert({ eventId });
+      return true;
+    } catch (error) {
+      // Unique-constraint violation => the event was already processed.
+      if (this.isUniqueViolation(error)) {
+        this.logger.warn(`Duplicate Stripe webhook event skipped: ${eventId}`);
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Handle a Stripe webhook event idempotently.
+   *
+   * Returns `true` when the event was processed, `false` when it was a
+   * duplicate delivery (caller should still respond with 200).
+   */
+  async handleStripeWebhookEvent(
+    eventId: string,
+    handler: () => Promise<void>,
+  ): Promise<boolean> {
+    const isFirstDelivery = await this.tryMarkWebhookEventProcessed(eventId);
+    if (!isFirstDelivery) {
+      return false;
+    }
+    await handler();
+    return true;
+  }
+
+  /**
+   * Prune processed webhook event IDs older than the retention window (30 days).
+   */
+  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  async cleanupProcessedWebhookEvents(): Promise<number> {
+    const cutoff = new Date(Date.now() - PROCESSED_WEBHOOK_EVENT_TTL_MS);
+    const result = await this.processedWebhookEventRepository
+      .createQueryBuilder()
+      .delete()
+      .from(ProcessedWebhookEvent)
+      .where('processed_at < :cutoff', { cutoff })
+      .execute();
+    return result.affected ?? 0;
+  }
+
+  private isUniqueViolation(error: unknown): boolean {
+    const code = (error as { code?: string; driverError?: { code?: string } })?.code
+      ?? (error as { driverError?: { code?: string } })?.driverError?.code;
+    return code === '23505' || code === 'SQLITE_CONSTRAINT' || code === 'ER_DUP_ENTRY';
+  }
 
   async enroll(userId: string, courseId: string, adminOverride = false): Promise<Enrollment> {
     // Throws NotFoundException (404) when the course doesn't exist (or is soft-deleted).
