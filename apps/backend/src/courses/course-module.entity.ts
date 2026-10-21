@@ -23,8 +23,8 @@ export class CourseModule {
   @JoinColumn({ name: 'courseId' })
   course: Course;
 
-  // Why: ORM-level cascade ensures lessons are persisted when module is added.
-  @OneToMany(() => Lesson, (lesson) => lesson.module, { cascade: true })
+  // Why: removing a module cascades removal of its lessons to prevent orphans.
+  @OneToMany(() => Lesson, (lesson) => lesson.module, { cascade: ['remove'] })
   lessons: Lesson[];
 
   @Column()

@@ -51,7 +51,10 @@ export class Lesson {
   @Column({ type: 'jsonb', nullable: true })
   learningObjectives?: string[];
 
-  @OneToMany(() => Assignment, (assignment) => assignment.lesson)
+  // Why: deleting a lesson removes its assignments to prevent orphan records.
+  @OneToMany(() => Assignment, (assignment) => assignment.lesson, {
+    cascade: ['remove'],
+  })
   assignments: Assignment[];
 
   @CreateDateColumn()
