@@ -4,6 +4,23 @@ import { useEffect } from 'react';
 import * as Sentry from '@sentry/nextjs';
 import { Button } from '@/components/ui/Button';
 
+function getCurrentUserId(): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+  try {
+    const raw = window.localStorage.getItem('auth-storage');
+    if (!raw) return undefined;
+    const parsed = JSON.parse(raw);
+    const id =
+      parsed?.state?.user?.id ??
+      parsed?.user?.id ??
+      parsed?.state?.userId ??
+      parsed?.userId;
+    return id != null ? String(id) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export default function GlobalError({
   error,
   reset,
@@ -12,10 +29,21 @@ export default function GlobalError({
   reset: () => void;
 }) {
   useEffect(() => {
+    const userId = getCurrentUserId();
+    if (userId) {
+      Sentry.setUser({ id: userId });
+    }
+
+    const errorInfo = {
+      componentStack: error.stack ?? 'No stack trace available',
+      digest: error.digest,
+    };
+
     Sentry.captureException(error, {
+      extra: errorInfo,
       contexts: {
         react: {
-          componentStack: error.stack ?? 'No stack trace available',
+          componentStack: errorInfo.componentStack,
         },
       },
     });

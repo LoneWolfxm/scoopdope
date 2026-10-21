@@ -15,6 +15,8 @@ export class MetricsService {
   readonly uptimeGauge: Gauge;
   readonly activeConnections: Gauge;
   readonly databasePoolSize: Gauge;
+  readonly databasePoolUtilization: Gauge;
+  readonly databasePoolWaitingCount: Gauge;
   readonly redisConnectedClients: Gauge;
   readonly enrollmentsTotal: Counter;
   readonly coursesCompletedTotal: Counter;
@@ -107,6 +109,18 @@ export class MetricsService {
       registers: [register],
     });
 
+    this.databasePoolUtilization = new Gauge({
+      name: 'app_database_pool_utilization',
+      help: 'Database connection pool utilization ratio (active / max)',
+      registers: [register],
+    });
+
+    this.databasePoolWaitingCount = new Gauge({
+      name: 'app_database_pool_waiting_count',
+      help: 'Number of requests waiting for a database connection',
+      registers: [register],
+    });
+
     this.redisConnectedClients = new Gauge({
       name: 'app_redis_connected_clients',
       help: 'Number of Redis connected clients',
@@ -196,6 +210,32 @@ export class MetricsService {
 
   setDatabasePoolSize(state: string, size: number) {
     this.databasePoolSize.set({ state }, size);
+  }
+
+  setDatabasePoolUtilization(ratio: number) {
+    this.databasePoolUtilization.set(ratio);
+  }
+
+  setDatabasePoolWaitingCount(count: number) {
+    this.databasePoolWaitingCount.set(count);
+  }
+
+  /**
+   * Convenience setter used by DatabasePoolService to publish a full pool snapshot.
+   */
+  setDatabasePoolStats(stats: {
+    total: number;
+    idle: number;
+    active: number;
+    waiting: number;
+    max: number;
+  }) {
+    this.databasePoolSize.set({ state: 'total' }, stats.total);
+    this.databasePoolSize.set({ state: 'idle' }, stats.idle);
+    this.databasePoolSize.set({ state: 'active' }, stats.active);
+    this.databasePoolSize.set({ state: 'max' }, stats.max);
+    this.databasePoolUtilization.set(stats.max > 0 ? stats.active / stats.max : 0);
+    this.databasePoolWaitingCount.set(stats.waiting);
   }
 
   setRedisConnectedClients(count: number) {

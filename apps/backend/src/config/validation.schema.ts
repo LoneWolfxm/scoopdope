@@ -14,8 +14,9 @@ export const validationSchema = Joi.object({
   DATABASE_PASSWORD: Joi.string().required(),
   DATABASE_NAME: Joi.string().required(),
   DATABASE_POOL_MIN: Joi.number().integer().min(1).max(20).default(5),
-  DATABASE_POOL_MAX: Joi.number().integer().min(5).max(100).default(20),
+  DB_POOL_MAX: Joi.number().integer().min(5).max(100).default(20),
   DATABASE_IDLE_TIMEOUT_MS: Joi.number().integer().min(1000).default(30000),
+  DB_POOL_CONNECTION_TIMEOUT_MS: Joi.number().integer().min(100).default(2000),
 
   // JWT
   JWT_SECRET: Joi.string().min(16).required(),

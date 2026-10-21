@@ -5,11 +5,17 @@ import { ConfigService } from '@nestjs/config';
 import { MetricsService } from '../metrics/metrics.service';
 
 export interface DatabasePoolStatus {
-  configured: { min: number; max: number; idleTimeoutMs: number };
+  configured: {
+    min: number;
+    max: number;
+    idleTimeoutMs: number;
+    connectionTimeoutMs: number;
+  };
   total: number;
   idle: number;
   waiting: number;
   active: number;
+  utilization: number;
 }
 
 @Injectable()
@@ -42,17 +48,22 @@ export class DatabasePoolService implements OnModuleInit, OnModuleDestroy {
     const total = pool?.totalCount ?? 0;
     const idle = pool?.idleCount ?? 0;
     const waiting = pool?.waitingCount ?? 0;
+    const max = this.configService.get<number>('database.poolMax') ?? 20;
+    const active = Math.max(0, total - idle);
 
     return {
       configured: {
         min: this.configService.get<number>('database.poolMin') ?? 5,
-        max: this.configService.get<number>('database.poolMax') ?? 20,
+        max,
         idleTimeoutMs: this.configService.get<number>('database.idleTimeoutMs') ?? 30_000,
+        connectionTimeoutMs:
+          this.configService.get<number>('database.connectionTimeoutMs') ?? 2_000,
       },
       total,
       idle,
       waiting,
-      active: Math.max(0, total - idle),
+      active,
+      utilization: max > 0 ? active / max : 0,
     };
   }
 
@@ -62,6 +73,10 @@ export class DatabasePoolService implements OnModuleInit, OnModuleDestroy {
     this.metricsService.setDatabasePoolSize('idle', status.idle);
     this.metricsService.setDatabasePoolSize('active', status.active);
     this.metricsService.setDatabasePoolSize('waiting', status.waiting);
-    this.logger.log(`Database pool: ${status.active} active, ${status.idle} idle, ${status.waiting} waiting`);
+    this.metricsService.setDatabasePoolUtilization(status.utilization);
+    this.logger.log(
+      `Database pool: ${status.active} active, ${status.idle} idle, ${status.waiting} waiting ` +
+        `(${(status.utilization * 100).toFixed(1)}% of ${status.configured.max})`,
+    );
   }
 }

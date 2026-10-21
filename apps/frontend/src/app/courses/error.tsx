@@ -3,6 +3,7 @@
 import { useEffect } from 'react';
 import * as Sentry from '@sentry/nextjs';
 import { Button } from '@/components/ui/Button';
+import { useAuth } from '@/hooks/useAuth';
 
 export default function CoursesError({
   error,
@@ -11,15 +12,19 @@ export default function CoursesError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  const { user } = useAuth();
+
   useEffect(() => {
+    if (user?.id) {
+      Sentry.setUser({ id: user.id });
+    }
     Sentry.captureException(error, {
-      contexts: {
-        react: {
-          componentStack: error.stack ?? 'No stack trace available',
-        },
+      extra: {
+        componentStack: error.stack ?? 'No stack trace available',
+        digest: error.digest,
       },
     });
-  }, [error]);
+  }, [error, user?.id]);
 
   const reportIssue = () => {
     const subject = encodeURIComponent('Courses Error Report from Scoopdope App');

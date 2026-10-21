@@ -3,8 +3,10 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Repository, In, IsNull } from 'typeorm';
 import { LearningPath } from './learning-path.entity';
 import { LearningPathEnrollment } from './learning-path-enrollment.entity';
@@ -16,6 +18,8 @@ import { UsersService } from '../users/users.service';
 
 @Injectable()
 export class LearningPathsService {
+  private readonly logger = new Logger(LearningPathsService.name);
+
   constructor(
     @InjectRepository(LearningPath)
     private pathRepo: Repository<LearningPath>,
@@ -26,6 +30,7 @@ export class LearningPathsService {
     private enrollmentsService: EnrollmentsService,
     private credentialsService: CredentialsService,
     private usersService: UsersService,
+    private eventEmitter: EventEmitter2,
   ) {}
 
   findAll(publishedOnly = true) {
@@ -134,6 +139,14 @@ export class LearningPathsService {
             user.stellarPublicKey,
           );
         }
+
+        // Emit path completion event so the notifications module can notify the learner.
+        this.eventEmitter.emit('learningPath.completed', {
+          userId,
+          learningPathId: enrollment.learningPathId,
+          learningPathTitle: enrollment.learningPath.title,
+          completedAt: enrollment.completedAt,
+        });
       }
     }
   }
