@@ -115,9 +115,13 @@ export const dataSourceOptions: DataSourceOptions = {
     : false,
   extra: {
     min: parseInt(process.env.DATABASE_POOL_MIN || '5', 10),
-    max: parseInt(process.env.DATABASE_POOL_MAX || '20', 10),
+    // DB_POOL_MAX takes precedence over the legacy DATABASE_POOL_MAX
+    max: parseInt(
+      process.env.DB_POOL_MAX || process.env.DATABASE_POOL_MAX || '20',
+      10,
+    ),
     idleTimeoutMillis: parseInt(process.env.DATABASE_IDLE_TIMEOUT_MS || '30000', 10),
-    connectionTimeoutMillis: 5_000,
+    connectionTimeoutMillis: 2_000,
   },
   synchronize,
 };

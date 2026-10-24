@@ -67,8 +67,13 @@ Consumed by `apps/backend`. Set these in the root `.env` (or `apps/backend/.env`
 | `DATABASE_PASSWORD` | ✅ Required 🔒 | — | Password for `DATABASE_USER`. |
 | `DATABASE_NAME` | ✅ Required | — | Name of the database to connect to (default in Docker: `scoopdope`). |
 | `DATABASE_URL` | ⚙️ Optional | — | Full PostgreSQL connection string (e.g. `postgresql://user:pass@host:5432/db`). Used in CI security-scan jobs as a convenience alternative to the individual `DATABASE_*` variables. When set, individual variables are ignored by that job. |
+| `DB_POOL_MAX` | ⚙️ Optional | `20` | Maximum number of connections in the TypeORM connection pool. Increase for high-traffic deployments; keep the total across all backend instances below the PostgreSQL `max_connections` limit (leaving headroom for migrations and admin sessions). |
+| `DB_POOL_CONNECTION_TIMEOUT_MS` | ⚙️ Optional | `2000` | Milliseconds to wait for a free connection from the pool before failing with a timeout error. Raise only if the database is known to be slow to accept connections. |
+| `DB_POOL_IDLE_TIMEOUT_MS` | ⚙️ Optional | `30000` | Milliseconds an idle pooled connection is kept open before being released. Lower values free server-side connections faster; higher values reduce reconnect overhead. |
 
 > **Docker Compose note:** `docker-compose.yml` hard-codes `DATABASE_HOST=postgres`, `DATABASE_USER=scoopdope`, and `DATABASE_PASSWORD=scoopdope` for local development. Override these in `.env` for staging/production.
+
+> **Pool sizing guidance:** The pool defaults (`DB_POOL_MAX=20`) are sized for production workloads and are validated by a load test at 200 concurrent users. When scaling horizontally, size the pool per instance so that `DB_POOL_MAX × <number of backend instances>` stays comfortably below the database's `max_connections` (a common rule of thumb is to leave ~20% headroom). For example, with `max_connections=100` and 4 backend instances, set `DB_POOL_MAX=20`. Pool utilization is exported as a Prometheus metric so you can tune this value from real traffic data.
 
 ### Authentication
 
@@ -203,6 +208,9 @@ DATABASE_PORT=5432
 DATABASE_USER=scoopdope
 DATABASE_PASSWORD=scoopdope
 DATABASE_NAME=scoopdope
+DB_POOL_MAX=20
+DB_POOL_CONNECTION_TIMEOUT_MS=2000
+DB_POOL_IDLE_TIMEOUT_MS=30000
 
 JWT_SECRET=dev-only-secret-change-in-production-32chars
 
@@ -262,6 +270,9 @@ DATABASE_PORT=5432
 DATABASE_USER=Scoopdope_staging
 DATABASE_PASSWORD=<strong-random-password>
 DATABASE_NAME=Scoopdope_staging
+DB_POOL_MAX=20
+DB_POOL_CONNECTION_TIMEOUT_MS=2000
+DB_POOL_IDLE_TIMEOUT_MS=30000
 
 JWT_SECRET=<random-32+-char-secret>
 
@@ -319,6 +330,9 @@ DATABASE_PORT=5432
 DATABASE_USER=Scoopdope_prod
 DATABASE_PASSWORD=<strong-random-password>
 DATABASE_NAME=Scoopdope_prod
+DB_POOL_MAX=20
+DB_POOL_CONNECTION_TIMEOUT_MS=2000
+DB_POOL_IDLE_TIMEOUT_MS=30000
 
 JWT_SECRET=<random-64-char-secret>
 

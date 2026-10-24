@@ -17,9 +17,16 @@ import { Enrollment } from '../enrollments/enrollment.entity';
 import { Progress } from '../progress/progress.entity';
 import { CourseModule } from '../courses/course-module.entity';
 import { Lesson } from '../courses/lesson.entity';
+import { LearningPath } from '../learning-paths/learning-path.entity';
 import { StellarService } from '../stellar/stellar.service';
 import { redactErrorMessage, redactStackTrace } from '../common/utils/log-redactor';
 import * as crypto from 'crypto';
+
+/** Certificate type used for learning-path-level credentials. */
+export const LEARNING_PATH_CERTIFICATE_TYPE = 'learning_path';
+
+/** Distinct template identifier for learning-path certificates. */
+export const LEARNING_PATH_CERTIFICATE_TEMPLATE = 'learning-path-completion-v1';
 
 /** Shape returned by GET /v1/certificates/:id/verify */
 export interface CertificateVerificationResult {
@@ -51,6 +58,8 @@ export class CertificatesService {
     private certificatesRepository: Repository<Certificate>,
     @InjectRepository(Enrollment)
     private enrollmentsRepository: Repository<Enrollment>,
+    @InjectRepository(LearningPath)
+    private learningPathsRepository: Repository<LearningPath>,
     private stellarService: StellarService,
     private readonly configService: ConfigService = new ConfigService(),
   ) {}
@@ -85,6 +94,110 @@ export class CertificatesService {
         redactStackTrace(err),
       );
     }
+  }
+
+  /**
+   * Issues a learning-path-level certificate once every course in the path
+   * has been completed. Idempotent: throws ConflictException if a path
+   * certificate already exists for this user.
+   *
+   * The certificate is stored with a distinct `certificateType` and
+   * `templateId` so it can be rendered differently from course certificates.
+   */
+  async issueLearningPathCertificate(
+    userId: string,
+    learningPathId: string,
+  ): Promise<Certificate> {
+    const learningPath = await this.learningPathsRepository.findOne({
+      where: { id: learningPathId },
+      relations: ['courses'],
+    });
+
+    if (!learningPath) {
+      throw new NotFoundException('Learning path not found');
+    }
+
+    // Idempotency check — one path certificate per user per path
+    const existing = await this.certificatesRepository.findOne({
+      where: {
+        userId,
+        learningPathId,
+        certificateType: LEARNING_PATH_CERTIFICATE_TYPE,
+      },
+    });
+
+    if (existing) {
+      throw new ConflictException(
+        'Certificate already issued for this learning path',
+      );
+    }
+
+    const certificateHash = this.generateLearningPathCertificateHash(
+      userId,
+      learningPathId,
+    );
+
+    const certificate = await this.certificatesRepository.save(
+      this.certificatesRepository.create({
+        userId,
+        courseId: null,
+        learningPathId,
+        certificateType: LEARNING_PATH_CERTIFICATE_TYPE,
+        templateId: LEARNING_PATH_CERTIFICATE_TEMPLATE,
+        certificateHash,
+        status: 'pending',
+      }),
+    );
+
+    const enrollment = await this.enrollmentsRepository.findOne({
+      where: { userId },
+      relations: ['user'],
+    });
+    const recipientPublicKey = enrollment?.user?.stellarPublicKey;
+
+    if (!recipientPublicKey) {
+      this.logger.warn(
+        `User ${userId} has no stellarPublicKey — learning path certificate stored off-chain only`,
+      );
+      certificate.status = 'minted';
+      return this.certificatesRepository.save(certificate);
+    }
+
+    try {
+      const txHash = await this.stellarService.mintCertificateNFT(
+        recipientPublicKey,
+        certificateHash,
+        learningPath.title ?? learningPathId,
+      );
+
+      certificate.stellarTransactionId = txHash;
+      certificate.status = 'minted';
+      await this.certificatesRepository.save(certificate);
+
+      this.logger.log(
+        `Learning path certificate minted on-chain — user=${userId} path=${learningPathId} tx=${txHash}`,
+      );
+    } catch (error: unknown) {
+      const errorMessage = redactErrorMessage(error);
+      this.logger.error(
+        `On-chain learning path certificate minting failed for user=${userId} path=${learningPathId}: ${errorMessage}`,
+        redactStackTrace(error),
+      );
+
+      await this.certificatesRepository.remove(certificate).catch((removeErr) =>
+        this.logger.error(
+          `Failed to remove pending learning path certificate: ${redactErrorMessage(removeErr)}`,
+        ),
+      );
+
+      throw new InternalServerErrorException({
+        message:
+          'Failed to mint learning path certificate on the Stellar network. Please try again.',
+        detail: errorMessage,
+      });
+    }
+
+    return this.toCertificateResponse(certificate);
   }
 
   // ── Core issuance ─────────────────────────────────────────────────────────
@@ -361,6 +474,20 @@ export class CertificatesService {
     return crypto
       .createHash('sha256')
       .update(`${userId}:${courseId}`)
+      .digest('hex');
+  }
+
+  /**
+   * Deterministic hash for learning-path certificates. The `learning_path`
+   * prefix keeps these hashes disjoint from course certificate hashes.
+   */
+  private generateLearningPathCertificateHash(
+    userId: string,
+    learningPathId: string,
+  ): string {
+    return crypto
+      .createHash('sha256')
+      .update(`learning_path:${userId}:${learningPathId}`)
       .digest('hex');
   }
 
