@@ -23,6 +23,7 @@ import {
   Address,
 } from '@stellar/stellar-sdk';
 import { redactErrorMessage } from '../common/utils/log-redactor';
+import { MetricsService } from '../metrics/metrics.service';
 
 const MAX_RETRIES = 3;
 const RETRY_OPTIONS = {
@@ -57,7 +58,8 @@ export class StellarService implements OnApplicationShutdown {
 
   constructor(
     private configService: ConfigService,
-    @Inject(CACHE_MANAGER) private cacheManager: Cache
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
+    private readonly metricsService: MetricsService
   ) {
     const isTestnet = this.configService.get<string>('stellar.network') !== 'mainnet';
     this.networkPassphrase = isTestnet ? Networks.TESTNET : Networks.PUBLIC;
@@ -564,24 +566,26 @@ export class StellarService implements OnApplicationShutdown {
    */
   private async invokeContract(contractId: string, method: string, args: any[]): Promise<string> {
     this.ensureSecretKeyConfigured();
-    const issuerKeypair = Keypair.fromSecret(this.secretKey);
-    const source = await this.sorobanServer.getAccount(issuerKeypair.publicKey());
-
-    const tx = new TransactionBuilder(source as any, {
-      fee: BASE_FEE,
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(
-        Operation.invokeContractFunction({
-          contract: contractId,
-          function: method,
-          args,
-        })
-      )
-      .setTimeout(30)
-      .build();
-
+    const startedAt = Date.now();
+    let status = 'success';
     try {
+      const issuerKeypair = Keypair.fromSecret(this.secretKey);
+      const source = await this.sorobanServer.getAccount(issuerKeypair.publicKey());
+
+      const tx = new TransactionBuilder(source as any, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          Operation.invokeContractFunction({
+            contract: contractId,
+            function: method,
+            args,
+          })
+        )
+        .setTimeout(30)
+        .build();
+
       const prepared = await this.sorobanServer.prepareTransaction(tx);
       (prepared as any).sign(issuerKeypair);
       const result = await this.sorobanServer.sendTransaction(prepared as any);
@@ -589,6 +593,12 @@ export class StellarService implements OnApplicationShutdown {
       return result.hash;
     } catch (err: any) {
       const msg = err?.message || String(err);
+      const isTimeout =
+        err?.code === 'ETIMEDOUT' ||
+        msg.toLowerCase().includes('timeout') ||
+        msg.toLowerCase().includes('timed out');
+      status = isTimeout ? 'timeout' : 'error';
+
       if (
         msg.toLowerCase().includes('insufficient balance') ||
         msg.includes('op_insufficient_balance') ||
@@ -599,14 +609,17 @@ export class StellarService implements OnApplicationShutdown {
           'User wallet has insufficient BST tokens to complete this operation'
         );
       }
-      if (
-        err?.code === 'ETIMEDOUT' ||
-        msg.toLowerCase().includes('timeout') ||
-        msg.toLowerCase().includes('timed out')
-      ) {
+      if (isTimeout) {
+        this.metricsService.incrementStellarRpcTimeout(method);
         throw new GatewayTimeoutException('Stellar network operation timed out. Please try again later.');
       }
       throw err;
+    } finally {
+      this.metricsService.observeStellarRpcLatency(
+        method,
+        status,
+        (Date.now() - startedAt) / 1000
+      );
     }
   }
 

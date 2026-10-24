@@ -149,3 +149,15 @@ variable "github_repo" {
   type        = string
   default     = "scoopdope"
 }
+
+variable "log_bucket" {
+  description = "Name of the S3 bucket used to store ALB access logs"
+  type        = string
+  default     = ""
+}
+
+variable "log_retention_days" {
+  description = "Number of days to retain ALB access logs in S3"
+  type        = number
+  default     = 90
+}

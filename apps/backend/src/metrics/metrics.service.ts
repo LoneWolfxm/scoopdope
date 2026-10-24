@@ -8,6 +8,7 @@ export class MetricsService {
   readonly credentialIssuedTotal: Counter;
   readonly bstMintedTotal: Counter;
   readonly stellarRpcLatency: Histogram;
+  readonly stellarRpcTimeouts: Counter;
   readonly cacheHitsTotal: Counter;
   readonly cacheMissesTotal: Counter;
   readonly healthCheckDuration: Histogram;
@@ -55,7 +56,14 @@ export class MetricsService {
       name: 'stellar_rpc_latency_seconds',
       help: 'Stellar RPC call latency in seconds',
       labelNames: ['method', 'status'],
-      buckets: [0.1, 0.5, 1, 2, 5],
+      buckets: [0.1, 0.5, 1, 2, 5, 10, 30],
+      registers: [register],
+    });
+
+    this.stellarRpcTimeouts = new Counter({
+      name: 'stellar_rpc_timeouts_total',
+      help: 'Total number of timed out Stellar RPC calls',
+      labelNames: ['method'],
       registers: [register],
     });
 
@@ -172,6 +180,10 @@ export class MetricsService {
 
   observeStellarRpcLatency(method: string, status: string, durationSeconds: number) {
     this.stellarRpcLatency.observe({ method, status }, durationSeconds);
+  }
+
+  incrementStellarRpcTimeout(method: string) {
+    this.stellarRpcTimeouts.inc({ method });
   }
 
   incrementCacheHit(cache: string) {

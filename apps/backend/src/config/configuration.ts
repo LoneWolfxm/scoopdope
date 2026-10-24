@@ -52,6 +52,15 @@ export default () => ({
     webAuthDomain: process.env.STELLAR_WEB_AUTH_DOMAIN || 'localhost',
   },
 
+  health: {
+    stellarCritical: process.env.STELLAR_HEALTH_CRITICAL?.toLowerCase() !== 'false',
+    stellarHorizonUrl:
+      process.env.STELLAR_HORIZON_URL ||
+      (process.env.STELLAR_NETWORK === 'mainnet'
+        ? 'https://horizon.stellar.org'
+        : 'https://horizon-testnet.stellar.org'),
+  },
+
   mail: {
     host: process.env.EMAIL_HOST!,
     port: parseInt(process.env.EMAIL_PORT || '587', 10),
@@ -118,6 +127,8 @@ export default () => ({
 
   exchangeRate: {
     apiKey: process.env.EXCHANGE_RATE_API_KEY || '',
+    baseUrl: process.env.EXCHANGE_RATE_BASE_URL || 'https://open.er-api.com/v6/latest',
+    cacheTtlMs: parseInt(process.env.EXCHANGE_RATE_CACHE_TTL_MS || '3600000', 10),
   },
 
   payouts: {
@@ -133,5 +144,9 @@ export default () => ({
     publicKey: process.env.VAPID_PUBLIC_KEY || '',
     privateKey: process.env.VAPID_PRIVATE_KEY || '',
     subject: process.env.VAPID_SUBJECT || 'mailto:admin@scoopdope.com',
+  },
+
+  survey: {
+    pseudonymizationSecret: process.env.SURVEY_PSEUDONYMIZATION_SECRET || '',
   },
 });

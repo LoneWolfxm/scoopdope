@@ -153,6 +153,83 @@ describe('LessonTrackingService', () => {
     });
   });
 
+  describe('updateProgress', () => {
+    const userId = 'user-1';
+    const lessonId = 'lesson-1';
+    const courseId = 'course-1';
+
+    const buildSession = (overrides: Partial<any> = {}) => ({
+      id: 'session-1',
+      userId,
+      lessonId,
+      courseId,
+      startedAt: new Date(),
+      endedAt: null,
+      durationSeconds: 0,
+      isActive: true,
+      watchedSeconds: 0,
+      furthestTimestamp: 0,
+      ...overrides,
+    });
+
+    it('should persist watchedSeconds and furthestTimestamp on partial watch (50%)', async () => {
+      const session = buildSession();
+      mockSessionRepo.findOne.mockResolvedValue(session);
+      mockSessionRepo.save.mockImplementation((s) => Promise.resolve(s));
+
+      const result = await service.updateProgress(userId, lessonId, courseId, {
+        watchedSeconds: 300,
+        furthestTimestamp: 300,
+      });
+
+      expect(mockSessionRepo.save).toHaveBeenCalled();
+      expect(result.watchedSeconds).toBe(300);
+      expect(result.furthestTimestamp).toBe(300);
+    });
+
+    it('should persist full watch (100%) values', async () => {
+      const session = buildSession();
+      mockSessionRepo.findOne.mockResolvedValue(session);
+      mockSessionRepo.save.mockImplementation((s) => Promise.resolve(s));
+
+      const result = await service.updateProgress(userId, lessonId, courseId, {
+        watchedSeconds: 600,
+        furthestTimestamp: 600,
+      });
+
+      expect(result.watchedSeconds).toBe(600);
+      expect(result.furthestTimestamp).toBe(600);
+    });
+
+    it('should not decrease furthestTimestamp on rewind', async () => {
+      const session = buildSession({ watchedSeconds: 400, furthestTimestamp: 400 });
+      mockSessionRepo.findOne.mockResolvedValue(session);
+      mockSessionRepo.save.mockImplementation((s) => Promise.resolve(s));
+
+      const result = await service.updateProgress(userId, lessonId, courseId, {
+        watchedSeconds: 420,
+        furthestTimestamp: 250,
+      });
+
+      expect(result.furthestTimestamp).toBe(400);
+      expect(result.watchedSeconds).toBe(420);
+    });
+
+    it('should exclude rewatched segments from watchedSeconds', async () => {
+      const session = buildSession({ watchedSeconds: 300, furthestTimestamp: 300 });
+      mockSessionRepo.findOne.mockResolvedValue(session);
+      mockSessionRepo.save.mockImplementation((s) => Promise.resolve(s));
+
+      const result = await service.updateProgress(userId, lessonId, courseId, {
+        watchedSeconds: 300,
+        furthestTimestamp: 200,
+      });
+
+      expect(result.watchedSeconds).toBe(300);
+      expect(result.furthestTimestamp).toBe(300);
+    });
+  });
+
   describe('getDifficultyReport', () => {
     it('should generate a difficulty report for a course', async () => {
       const courseId = 'course-1';

@@ -12,6 +12,7 @@ import { NotificationsController } from './notifications.controller';
 import { NotificationsEvents } from './notifications.events';
 import { NotificationsGateway } from './notifications.gateway';
 import { EmailModule } from '../email/email.module';
+import { NotificationIdempotencyService } from './notification-idempotency.service';
 
 @Module({
   imports: [
@@ -31,7 +32,8 @@ import { EmailModule } from '../email/email.module';
     PushNotificationsService,
     NotificationsEvents,
     NotificationsGateway,
+    NotificationIdempotencyService,
   ],
-  exports: [NotificationsService, PushNotificationsService],
+  exports: [NotificationsService, PushNotificationsService, NotificationIdempotencyService],
 })
 export class NotificationsModule {}

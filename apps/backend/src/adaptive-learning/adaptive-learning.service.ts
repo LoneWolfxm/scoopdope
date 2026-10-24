@@ -1,8 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { StudentPerformance } from './student-performance.entity';
 import { AbTestAssignment } from './ab-test-assignment.entity';
+import { Enrollment } from '../enrollments/enrollment.entity';
 
 const MASTERY_THRESHOLD_UP = 0.8;
 const MASTERY_THRESHOLD_DOWN = 0.4;
@@ -14,6 +15,9 @@ export class AdaptiveLearningService {
     private performanceRepo: Repository<StudentPerformance>,
     @InjectRepository(AbTestAssignment)
     private abTestRepo: Repository<AbTestAssignment>,
+    @Optional()
+    @InjectRepository(Enrollment)
+    private enrollmentRepo?: Repository<Enrollment>,
   ) {}
 
   async recordQuizResult(
@@ -54,18 +58,38 @@ export class AdaptiveLearningService {
     return current;
   }
 
-  async getRecommendations(userId: string): Promise<{
+  async getRecommendations(
+    userId: string,
+    options: { includeCompleted?: boolean } = {},
+  ): Promise<{
     weakTopics: string[];
     recommendedDifficulty: Record<string, string>;
   }> {
     const performances = await this.performanceRepo.find({ where: { userId } });
 
+    // Exclude courses the learner is currently enrolled in or has completed.
+    // Completed courses are only restored when includeCompleted is true
+    // (refresher recommendations).
+    const excludedStatuses = options.includeCompleted
+      ? ['ACTIVE']
+      : ['ACTIVE', 'COMPLETED'];
+
+    let excludedCourseIds: Set<string> = new Set();
+    if (this.enrollmentRepo) {
+      const enrollments = await this.enrollmentRepo.find({
+        where: { userId, status: In(excludedStatuses) },
+      });
+      excludedCourseIds = new Set(enrollments.map((e) => e.courseId));
+    }
+
     const weakTopics = performances
       .filter((p) => p.masteryLevel < MASTERY_THRESHOLD_DOWN)
-      .map((p) => p.topicId);
+      .map((p) => p.topicId)
+      .filter((topicId) => !excludedCourseIds.has(topicId));
 
     const recommendedDifficulty: Record<string, string> = {};
     for (const p of performances) {
+      if (excludedCourseIds.has(p.topicId)) continue;
       recommendedDifficulty[p.topicId] = p.currentDifficulty;
     }
 

@@ -6,6 +6,8 @@ import {
   UpdateDateColumn,
   ManyToMany,
   JoinTable,
+  BeforeInsert,
+  BeforeUpdate,
 } from 'typeorm';
 import { Course } from '../courses/course.entity';
 
@@ -14,7 +16,13 @@ export class Coupon {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ unique: true })
+  @Column({
+    unique: true,
+    transformer: {
+      to: (value: string) => (value ? value.toUpperCase() : value),
+      from: (value: string) => value,
+    },
+  })
   code: string;
 
   @Column()
@@ -44,4 +52,12 @@ export class Coupon {
 
   @UpdateDateColumn()
   updatedAt: Date;
+
+  @BeforeInsert()
+  @BeforeUpdate()
+  normalizeCode() {
+    if (this.code) {
+      this.code = this.code.toUpperCase();
+    }
+  }
 }

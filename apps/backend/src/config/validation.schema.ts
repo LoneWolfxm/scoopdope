@@ -6,6 +6,8 @@ export const validationSchema = Joi.object({
   PORT: Joi.number().default(3000),
   LOG_FORMAT: Joi.string().valid('text', 'json').default('text'),
   ENABLE_SWAGGER: Joi.boolean().default(false),
+  SWAGGER_ENABLED: Joi.boolean().default(false),
+  SWAGGER_PASSWORD: Joi.string().allow('').optional(),
 
   // Database
   DATABASE_HOST: Joi.string().required(),
@@ -30,6 +32,8 @@ export const validationSchema = Joi.object({
   // Stellar
   STELLAR_NETWORK: Joi.string().valid('testnet', 'mainnet').default('testnet'),
   STELLAR_SECRET_KEY: Joi.string().optional(),
+  STELLAR_HORIZON_URL: Joi.string().uri().optional(),
+  STELLAR_HEALTH_CRITICAL: Joi.boolean().default(true),
   SOROBAN_RPC_URL: Joi.string().uri().default('https://soroban-testnet.stellar.org'),
   SOROBAN_CONTRACT_ID: Joi.string().allow('').default(''),
   ENROLLMENT_CONTRACT_ID: Joi.string().allow('').default(''),
@@ -105,4 +109,7 @@ export const validationSchema = Joi.object({
   // Rewards
   REWARD_MODULE_COMPLETION: Joi.number().integer().min(0).default(25),
   REWARD_COURSE_COMPLETION: Joi.number().integer().min(0).default(100),
+
+  // Survey
+  SURVEY_PSEUDONYMIZATION_SECRET: Joi.string().min(32).required(),
 });

@@ -103,7 +103,10 @@ export class EmailService implements OnModuleInit, OnModuleDestroy {
     userName: string;
     locale?: string;
   }): Promise<void> {
-    const template = emailTemplates.applicationReceived(data);
+    const template = emailTemplates.applicationReceived({
+      ...data,
+      locale: data.locale ?? 'en',
+    });
     await this.enqueue(data.userEmail, template.subject, template.html);
   }
 
@@ -112,7 +115,10 @@ export class EmailService implements OnModuleInit, OnModuleDestroy {
     userName: string;
     locale?: string;
   }): Promise<void> {
-    const template = emailTemplates.applicationApproved(data);
+    const template = emailTemplates.applicationApproved({
+      ...data,
+      locale: data.locale ?? 'en',
+    });
     await this.enqueue(data.userEmail, template.subject, template.html);
   }
 
@@ -122,7 +128,20 @@ export class EmailService implements OnModuleInit, OnModuleDestroy {
     locale?: string;
     adminNote?: string | null;
   }): Promise<void> {
-    const template = emailTemplates.applicationRejected(data);
+    const template = emailTemplates.applicationRejected({
+      ...data,
+      locale: data.locale ?? 'en',
+    });
+    await this.enqueue(data.userEmail, template.subject, template.html);
+  }
+
+  async sendWaitlistConfirmation(data: {
+    userEmail: string;
+    userName: string;
+    position: number;
+    locale?: string;
+  }): Promise<void> {
+    const template = emailTemplates.waitlistConfirmation(data);
     await this.enqueue(data.userEmail, template.subject, template.html);
   }
 
@@ -186,7 +205,7 @@ export class EmailService implements OnModuleInit, OnModuleDestroy {
   // --- Event listeners ---
 
   @OnEvent('user.registered')
-  async onUserRegistered(payload: { userId: string; userEmail: string; userName: string; verificationToken: string }) {
+  async onUserRegistered(payload: { userId: string; userEmail: string; userName: string; verificationToken: string; locale?: string }) {
     const verificationUrl = `${this.config.get('frontend.url')}/auth/verify?token=${payload.verificationToken}`;
     const logoUrl = this.config.get<string>('email.logoUrl');
     
@@ -194,13 +213,14 @@ export class EmailService implements OnModuleInit, OnModuleDestroy {
       userName: payload.userName,
       verificationUrl,
       logo: logoUrl,
+      locale: payload.locale ?? 'en',
     });
     
     await this.enqueue(payload.userEmail, tpl.subject, tpl.html);
   }
 
   @OnEvent('password.reset.requested')
-  async onPasswordResetRequested(payload: { userId: string; userEmail: string; userName: string; resetToken: string; expiresIn?: string }) {
+  async onPasswordResetRequested(payload: { userId: string; userEmail: string; userName: string; resetToken: string; expiresIn?: string; locale?: string }) {
     const resetUrl = `${this.config.get('frontend.url')}/auth/reset-password?token=${payload.resetToken}`;
     const logoUrl = this.config.get<string>('email.logoUrl');
     const expiresIn = payload.expiresIn || '1 hour';
@@ -210,13 +230,14 @@ export class EmailService implements OnModuleInit, OnModuleDestroy {
       resetUrl,
       expiresIn,
       logo: logoUrl,
+      locale: payload.locale ?? 'en',
     });
     
     await this.enqueue(payload.userEmail, tpl.subject, tpl.html);
   }
 
   @OnEvent('enrollment.created')
-  async onEnrollment(payload: { userId: string; courseId: string; userEmail: string; userName: string; courseTitle: string }) {
+  async onEnrollment(payload: { userId: string; courseId: string; userEmail: string; userName: string; courseTitle: string; locale?: string }) {
     const prefs = await this.getOrCreatePrefs(payload.userId);
     if (prefs.unsubscribedAll || !prefs.enrollment) return;
 
@@ -225,12 +246,13 @@ export class EmailService implements OnModuleInit, OnModuleDestroy {
       courseTitle: payload.courseTitle,
       courseUrl: `${this.config.get('frontend.url')}/courses/${payload.courseId}`,
       unsubscribeUrl: this.unsubscribeUrl(prefs.unsubscribeToken),
+      locale: payload.locale ?? 'en',
     });
     await this.enqueue(payload.userEmail, tpl.subject, tpl.html);
   }
 
   @OnEvent('enrollment.completed')
-  async onCompletion(payload: { userId: string; courseId: string; userEmail: string; userName: string; courseTitle: string }) {
+  async onCompletion(payload: { userId: string; courseId: string; userEmail: string; userName: string; courseTitle: string; locale?: string }) {
     const prefs = await this.getOrCreatePrefs(payload.userId);
     if (prefs.unsubscribedAll || !prefs.completion) return;
 
@@ -239,12 +261,13 @@ export class EmailService implements OnModuleInit, OnModuleDestroy {
       courseTitle: payload.courseTitle,
       credentialUrl: `${this.config.get('frontend.url')}/credentials`,
       unsubscribeUrl: this.unsubscribeUrl(prefs.unsubscribeToken),
+      locale: payload.locale ?? 'en',
     });
     await this.enqueue(payload.userEmail, tpl.subject, tpl.html);
   }
 
   @OnEvent('credential.issued')
-  async onCredentialIssued(payload: { userId: string; userEmail: string; userName: string; courseTitle: string; txHash: string }) {
+  async onCredentialIssued(payload: { userId: string; userEmail: string; userName: string; courseTitle: string; txHash: string; locale?: string }) {
     const prefs = await this.getOrCreatePrefs(payload.userId);
     if (prefs.unsubscribedAll || !prefs.credentialIssued) return;
 
@@ -253,12 +276,13 @@ export class EmailService implements OnModuleInit, OnModuleDestroy {
       courseTitle: payload.courseTitle,
       txHash: payload.txHash,
       unsubscribeUrl: this.unsubscribeUrl(prefs.unsubscribeToken),
+      locale: payload.locale ?? 'en',
     });
     await this.enqueue(payload.userEmail, tpl.subject, tpl.html);
   }
 
   @OnEvent('certificate.issued')
-  async onCertificateIssued(payload: { userId: string; userEmail: string; userName: string; courseTitle: string; certificateId: string; txHash: string }) {
+  async onCertificateIssued(payload: { userId: string; userEmail: string; userName: string; courseTitle: string; certificateId: string; txHash: string; locale?: string }) {
     const prefs = await this.getOrCreatePrefs(payload.userId);
     if (prefs.unsubscribedAll || !prefs.credentialIssued) return;
 
@@ -269,12 +293,13 @@ export class EmailService implements OnModuleInit, OnModuleDestroy {
       certificateUrl: `${this.config.get('frontend.url')}/certificates/${payload.certificateId}`,
       txHash: payload.txHash,
       logo: logoUrl,
+      locale: payload.locale ?? 'en',
     });
     await this.enqueue(payload.userEmail, tpl.subject, tpl.html);
   }
 
   @OnEvent('module.unlocked')
-  async onModuleUnlocked(payload: { userId: string; userEmail: string; userName: string; courseId: string; courseTitle: string; moduleTitle: string }) {
+  async onModuleUnlocked(payload: { userId: string; userEmail: string; userName: string; courseId: string; courseTitle: string; moduleTitle: string; locale?: string }) {
     const prefs = await this.getOrCreatePrefs(payload.userId);
     if (prefs.unsubscribedAll || !prefs.enrollment) return;
 
@@ -284,6 +309,7 @@ export class EmailService implements OnModuleInit, OnModuleDestroy {
       moduleTitle: payload.moduleTitle,
       courseUrl: `${this.config.get('frontend.url')}/courses/${payload.courseId}`,
       unsubscribeUrl: this.unsubscribeUrl(prefs.unsubscribeToken),
+      locale: payload.locale ?? 'en',
     });
     await this.enqueue(payload.userEmail, tpl.subject, tpl.html);
   }

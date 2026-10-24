@@ -1,8 +1,8 @@
 import {
   BadRequestException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -99,11 +99,21 @@ export class PrerequisitesService {
   /** Throws if prerequisites are not met (used by enrollment) */
   async enforcePrerequisites(userId: string, courseId: string, adminOverride = false): Promise<void> {
     const { satisfied, missing } = await this.validatePrerequisites(userId, courseId, adminOverride);
-    if (!satisfied) {
-      throw new ForbiddenException(
-        `Prerequisites not completed. Missing course IDs: ${missing.join(', ')}`,
-      );
-    }
+    if (satisfied) return;
+
+    const missingCourses = await this.courseRepo.find({
+      where: { id: In(missing) },
+      select: ['id', 'title'],
+    });
+    const titleMap = new Map(missingCourses.map((c) => [c.id, c.title]));
+
+    throw new UnprocessableEntityException({
+      message: 'Prerequisites not completed',
+      missingPrerequisites: missing.map((id) => ({
+        courseId: id,
+        title: titleMap.get(id) ?? null,
+      })),
+    });
   }
 
   /** Returns prerequisites with per-course progress for the given user */

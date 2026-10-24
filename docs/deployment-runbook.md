@@ -14,8 +14,9 @@ Step-by-step guide for deploying scoopdope to production. Follow sections in ord
 3. [Deploy: Backend](#3-deploy-backend)
 4. [Deploy: Frontend](#4-deploy-frontend)
 5. [Health Check Verification](#5-health-check-verification)
-6. [Rollback Procedures](#6-rollback-procedures)
-7. [Post-Deployment Monitoring](#7-post-deployment-monitoring)
+6. [Blue-Green Cutover](#6-blue-green-cutover)
+7. [Rollback Procedures](#7-rollback-procedures)
+8. [Post-Deployment Monitoring](#8-post-deployment-monitoring)
 
 ---
 
@@ -309,7 +310,73 @@ Confirm the latest migration timestamp matches what was just deployed.
 
 ---
 
-## 6. Rollback Procedures
+## 6. Blue-Green Cutover
+
+Production runs two environments behind a single router: **blue** (live, serving traffic) and **green** (idle, receives the new release). A deployment always targets the idle environment first. Traffic is switched to green **only** after every health check below passes against green.
+
+### 6a. Health Check Criteria (gate)
+
+The cutover gate is evaluated against the **green** environment only. All criteria must pass; any failure aborts the cutover.
+
+| # | Check | Target | Pass criterion |
+|---|---|---|---|
+| 1 | Liveness/readiness | `GET https://green.api.scoopdope.example.com/health` | HTTP `200` with `"status": "ok"` and `database`, `redis`, `stellar` all `"up"` |
+| 2 | Auth smoke test | `POST /v1/auth/login` (invalid creds) | HTTP `401` |
+| 3 | Courses list | `GET /v1/courses` | HTTP `200` with a JSON array body |
+| 4 | Stellar connectivity | `GET /v1/stellar/network-status` | HTTP `200`, `.horizon.status` and `.soroban.status` both `"healthy"` |
+| 5 | Metrics | `GET /metrics` | HTTP `200` |
+
+`GET /health` is retried for up to 5 minutes (30 attempts × 10s) to allow the container to finish booting. The smoke tests (checks 2–5) run once `/health` returns `200`.
+
+### 6b. Cutover Steps
+
+1. **Deploy to green** — deploy the release image to the green environment only (see [Section 3](#3-deploy-backend)). Blue continues serving all production traffic.
+2. **Wait for green to boot** — poll `GET /health` on green until it returns `200` (max 5 min).
+3. **Run the health gate** — execute the checks in [6a](#6a-health-check-criteria-gate) against green:
+   ```bash
+   GREEN=https://green.api.scoopdope.example.com
+
+   # 1. Health endpoint must return 200
+   curl -sf -o /dev/null -w "%{http_code}" $GREEN/health | grep -q 200 \
+     && echo "✅ /health 200" || { echo "❌ /health failed"; exit 1; }
+
+   # 2. Auth smoke test -> 401
+   curl -sf -o /dev/null -w "%{http_code}" $GREEN/v1/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{"email":"smoke@test.invalid","password":"x"}' | grep -q 401 \
+     && echo "✅ Auth endpoint" || { echo "❌ Auth failed"; exit 1; }
+
+   # 3. Courses list -> 200
+   curl -sf -o /dev/null -w "%{http_code}" $GREEN/v1/courses | grep -q 200 \
+     && echo "✅ Courses endpoint" || { echo "❌ Courses failed"; exit 1; }
+
+   # 4. Stellar connectivity -> healthy
+   curl -sf $GREEN/v1/stellar/network-status | jq -e '.horizon.status == "healthy" and .soroban.status == "healthy"' > /dev/null \
+     && echo "✅ Stellar connectivity" || { echo "❌ Stellar failed"; exit 1; }
+
+   # 5. Metrics -> 200
+   curl -sf -o /dev/null -w "%{http_code}" $GREEN/metrics | grep -q 200 \
+     && echo "✅ Metrics endpoint" || { echo "❌ Metrics failed"; exit 1; }
+   ```
+4. **Switch traffic** — only if every check above passed, point the router/load balancer at green. Blue remains running (idle) as the rollback target.
+5. **Verify live traffic** — re-run [Section 5](#5-health-check-verification) against the public URL to confirm the cutover succeeded.
+6. **Drain blue** — after a 30-minute soak with no errors (see [Section 8](#8-post-deployment-monitoring)), scale blue down or leave it idle for the next release.
+
+> **Gating rule:** Traffic is **never** switched to green until `GET /health` returns `200` **and** all smoke tests pass. If any check fails, the cutover is aborted and traffic stays on blue.
+
+### 6c. Automatic Rollback to Blue
+
+`deploy-production.yml` enforces the gate. If `/health` does not return `200` within the retry window, or any smoke test fails, the workflow:
+
+1. Does **not** switch traffic — blue keeps serving production.
+2. Marks the deployment as failed and posts a comment on the release with the failing check.
+3. Leaves green running for debugging (inspect logs via `docker compose -f docker-compose.prod.yml logs green`).
+
+If a failure is detected **after** traffic has been switched (e.g. during the 30-minute soak), the workflow automatically switches traffic back to blue and scales green down. Manual rollback steps are in [Section 7](#7-rollback-procedures).
+
+---
+
+## 7. Rollback Procedures
 
 ### Automated Rollback
 
@@ -370,7 +437,8 @@ stellar contract install --wasm target/wasm32-unknown-unknown/release/brain_stor
 
 | Symptom | Action |
 |---|---|
-| Health check fails, no DB migration | Redeploy previous backend image |
+| Green health check fails before cutover | No action needed — traffic stays on blue; fix green and redeploy |
+| Health check fails after cutover | Automatic rollback to blue; then redeploy previous backend image |
 | Health check fails after migration | Redeploy previous image + revert migration |
 | Frontend 500s | Redeploy previous frontend image |
 | Contract calls failing | Repoint env vars to previous contract IDs + redeploy backend |
@@ -378,7 +446,7 @@ stellar contract install --wasm target/wasm32-unknown-unknown/release/brain_stor
 
 ---
 
-## 7. Post-Deployment Monitoring
+## 8. Post-Deployment Monitoring
 
 ### Immediate (first 30 minutes)
 

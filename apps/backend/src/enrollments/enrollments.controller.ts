@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Request, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, Request, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { EnrollmentsService } from './enrollments.service';
@@ -35,16 +35,28 @@ export class EnrollmentsController {
     },
   })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @ApiResponse({ status: 403, description: 'Prerequisites not completed' })
+  @ApiResponse({
+    status: 422,
+    description: 'Prerequisites not completed',
+    schema: {
+      example: {
+        statusCode: 422,
+        message: 'Prerequisites not completed',
+        missingPrerequisites: [{ courseId: 'uuid', title: 'Course title' }],
+      },
+    },
+  })
   @ApiResponse({ status: 404, description: 'Course not found' })
   @ApiResponse({ status: 409, description: 'Already enrolled' })
   enroll(
     @Param('id') courseId: string,
     @Request() req: { user: { id: string; role: string } },
+    @Query('override') override?: string,
     @Body('adminOverride') adminOverride?: boolean,
   ) {
     const isAdmin = req.user.role === 'admin';
-    return this.enrollmentsService.enroll(req.user.id, courseId, isAdmin && !!adminOverride);
+    const wantsOverride = override === 'true' || !!adminOverride;
+    return this.enrollmentsService.enroll(req.user.id, courseId, isAdmin && wantsOverride);
   }
 
   @Post('enrollments')
@@ -55,14 +67,27 @@ export class EnrollmentsController {
   @ApiResponse({ status: 429, description: 'Too many requests' })
   @ApiResponse({ status: 500, description: 'Internal server error' })
   @ApiResponse({ status: 201, description: 'Enrolled successfully' })
-  @ApiResponse({ status: 403, description: 'Prerequisites not completed' })
+  @ApiResponse({
+    status: 422,
+    description: 'Prerequisites not completed',
+    schema: {
+      example: {
+        statusCode: 422,
+        message: 'Prerequisites not completed',
+        missingPrerequisites: [{ courseId: 'uuid', title: 'Course title' }],
+      },
+    },
+  })
   @ApiResponse({ status: 409, description: 'Already enrolled' })
   enrollByBody(
     @Body('courseId') courseId: string,
     @Request() req: { user: { id: string; role: string } },
+    @Query('override') override?: string,
+    @Body('adminOverride') adminOverride?: boolean,
   ) {
     const isAdmin = req.user.role === 'admin';
-    return this.enrollmentsService.enroll(req.user.id, courseId, false);
+    const wantsOverride = override === 'true' || !!adminOverride;
+    return this.enrollmentsService.enroll(req.user.id, courseId, isAdmin && wantsOverride);
   }
 
   @Delete('courses/:id/enroll')

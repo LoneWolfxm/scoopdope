@@ -46,7 +46,8 @@ export class AnnouncementsService {
     }
 
     // Verify user is the course instructor or admin
-    if (course.instructorId !== instructorId) {
+    const isPlatformWide = await this.isAdmin(instructorId);
+    if (course.instructorId !== instructorId && !isPlatformWide) {
       throw new ForbiddenException('Only course instructors can post announcements');
     }
 
@@ -70,8 +71,10 @@ export class AnnouncementsService {
       instructor,
     };
 
-    // Notify all enrolled students asynchronously
-    this.notifyEnrolledStudents(courseId, dto.title);
+    // Notify recipients asynchronously. Recipients are resolved at send time:
+    // course announcements go only to currently enrolled learners, while
+    // platform-wide announcements (admin role) broadcast to all users.
+    this.notifyRecipients(courseId, dto.title, isPlatformWide);
 
     return result;
   }
@@ -215,33 +218,69 @@ export class AnnouncementsService {
   }
 
   /**
-   * Notify all enrolled students about a new announcement
-   * Runs asynchronously without blocking the main request
+   * Determine whether the given user has the admin role.
    */
-  private async notifyEnrolledStudents(courseId: string, announcementTitle: string): Promise<void> {
-    try {
-      const enrollments = await this.enrollmentRepo.find({
-        where: { courseId },
-        select: { userId: true },
-      });
+  private async isAdmin(userId: string): Promise<boolean> {
+    const user = await this.userRepo.findOne({
+      where: { id: userId },
+      select: ['id', 'role'],
+    });
+    return user?.role === 'admin';
+  }
 
-      if (enrollments.length === 0) {
+  /**
+   * Notify the appropriate recipients about a new announcement.
+   * Runs asynchronously without blocking the main request.
+   *
+   * Recipients are resolved at send time so that users who enroll after an
+   * announcement was sent do not retroactively receive it.
+   */
+  private async notifyRecipients(
+    courseId: string,
+    announcementTitle: string,
+    isPlatformWide: boolean
+  ): Promise<void> {
+    try {
+      const recipientIds = isPlatformWide
+        ? await this.getAllUserIds()
+        : await this.getEnrolledUserIds(courseId);
+
+      if (recipientIds.length === 0) {
         return;
       }
 
+      const message = isPlatformWide
+        ? `New platform announcement: "${announcementTitle}"`
+        : `New announcement in your course: "${announcementTitle}"`;
+
       await Promise.all(
-        enrollments.map((e) =>
+        recipientIds.map((userId) =>
           this.notifications
-            .create(
-              e.userId,
-              NotificationType.ANNOUNCEMENT,
-              `New announcement in your course: "${announcementTitle}"`
-            )
-            .catch((err) => console.error('Failed to notify student:', err))
+            .create(userId, NotificationType.ANNOUNCEMENT, message)
+            .catch((err) => console.error('Failed to notify user:', err))
         )
       );
     } catch (err) {
-      console.error('Failed to notify enrolled students:', err);
+      console.error('Failed to notify announcement recipients:', err);
     }
+  }
+
+  /**
+   * Resolve the set of users currently enrolled in a course.
+   */
+  private async getEnrolledUserIds(courseId: string): Promise<string[]> {
+    const enrollments = await this.enrollmentRepo.find({
+      where: { courseId },
+      select: { userId: true },
+    });
+    return enrollments.map((e) => e.userId);
+  }
+
+  /**
+   * Resolve the set of all registered users for platform-wide broadcasts.
+   */
+  private async getAllUserIds(): Promise<string[]> {
+    const users = await this.userRepo.find({ select: { id: true } });
+    return users.map((u) => u.id);
   }
 }

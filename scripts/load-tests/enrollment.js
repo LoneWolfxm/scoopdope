@@ -20,18 +20,19 @@ export const options = {
 };
 
 const BASE_URL = __ENV.API_URL || 'http://localhost:3000';
+const API_PREFIX = '/api/v1';
 
 export function setup() {
   // Register a test user and return auth token + course list
   const email = `enroll_setup_${Date.now()}@example.com`;
   const reg = http.post(
-    `${BASE_URL}/v1/auth/register`,
+    `${BASE_URL}${API_PREFIX}/auth/register`,
     JSON.stringify({ email, password: 'Test@1234!', username: `enroll_${Date.now()}` }),
     { headers: { 'Content-Type': 'application/json' } }
   );
   const token = reg.status === 201 ? JSON.parse(reg.body).access_token : null;
 
-  const coursesRes = http.get(`${BASE_URL}/v1/courses`, {
+  const coursesRes = http.get(`${BASE_URL}${API_PREFIX}/courses`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   const courses = coursesRes.status === 200 ? JSON.parse(coursesRes.body) : [];
@@ -49,7 +50,7 @@ export default function (data) {
 
   group('Auth', () => {
     const reg = http.post(
-      `${BASE_URL}/v1/auth/register`,
+      `${BASE_URL}${API_PREFIX}/auth/register`,
       JSON.stringify({ email, password: 'Test@1234!', username: `vu${__VU}_${__ITER}` }),
       { headers: { 'Content-Type': 'application/json' } }
     );
@@ -58,7 +59,7 @@ export default function (data) {
     } else {
       // Try login if already registered
       const login = http.post(
-        `${BASE_URL}/v1/auth/login`,
+        `${BASE_URL}${API_PREFIX}/auth/login`,
         JSON.stringify({ email, password: 'Test@1234!' }),
         { headers: { 'Content-Type': 'application/json' } }
       );
@@ -74,10 +75,14 @@ export default function (data) {
   const authHeaders = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
   group('Browse Courses', () => {
-    const res = http.get(`${BASE_URL}/v1/courses`, { headers: authHeaders });
+    const res = http.get(`${BASE_URL}${API_PREFIX}/courses`, { headers: authHeaders });
     check(res, {
       'courses listed': (r) => r.status === 200,
       'response time ok': (r) => r.timings.duration < 600,
+    });
+    // Smoke assertion: fail if the API prefix is wrong (all requests 404)
+    check(res, {
+      'smoke: at least one 200 response': (r) => r.status === 200,
     });
   });
 
@@ -89,7 +94,7 @@ export default function (data) {
 
     const courseId = courseIds[__VU % courseIds.length];
     const res = http.post(
-      `${BASE_URL}/v1/enrollments`,
+      `${BASE_URL}${API_PREFIX}/enrollments`,
       JSON.stringify({ courseId }),
       { headers: authHeaders, tags: { endpoint: 'enroll' } }
     );

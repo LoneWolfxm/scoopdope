@@ -5,12 +5,39 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import { DistributedLockService } from '../common/distributed-lock.service';
+import { PseudonymizationService } from './pseudonymization.service';
 import { CourseAnalytics } from './course-analytics.entity';
 import { Enrollment } from '../enrollments/enrollment.entity';
 import { Progress } from '../progress/progress.entity';
 import { Review } from '../courses/review.entity';
 import { User } from '../users/user.entity';
 import { Course, CourseStatus } from '../courses/course.entity';
+import { BuybackEvent, BuybackEventType } from './buyback-event.entity';
+
+/**
+ * Raw Soroban contract event as delivered by the Stellar event listener.
+ * `topics` are the base64/XDR-decoded topic symbols (e.g. `buyback_scheduled`),
+ * `value` is the decoded event payload.
+ */
+export interface SorobanContractEvent {
+  contractId: string;
+  ledger: number;
+  txHash: string;
+  topics: string[];
+  value: Record<string, unknown>;
+  occurredAt?: Date;
+}
+
+export interface BuybackEventIngestResult {
+  stored: number;
+  skipped: number;
+}
+
+const BUYBACK_EVENT_TYPES: Record<string, BuybackEventType> = {
+  buyback_scheduled: BuybackEventType.SCHEDULED,
+  buyback_executed: BuybackEventType.EXECUTED,
+  buyback_cancelled: BuybackEventType.CANCELLED,
+};
 
 export interface PlatformAnalytics {
   totalUsers: number;
@@ -54,8 +81,10 @@ export class AnalyticsService {
     @InjectRepository(Review) private reviewRepo: Repository<Review>,
     @InjectRepository(User) private userRepo: Repository<User>,
     @InjectRepository(Course) private courseRepo: Repository<Course>,
+    @InjectRepository(BuybackEvent) private buybackEventRepo: Repository<BuybackEvent>,
     @Inject(CACHE_MANAGER) private cache: Cache,
     private readonly distributedLockService: DistributedLockService,
+    private readonly pseudonymizationService: PseudonymizationService,
   ) {}
 
   async getAnalytics(courseId: string): Promise<CourseAnalytics> {
@@ -272,6 +301,89 @@ export class AnalyticsService {
 
     await this.cache.set(cacheKey, result, this.CACHE_TTL);
     return result;
+  }
+
+  /**
+   * Consume buyback contract events emitted by the Soroban buyback contract and
+   * persist them into the analytics table. Called by the Stellar event listener
+   * for every event whose contract id matches the configured buyback contract.
+   *
+   * Supported topics: `buyback_scheduled`, `buyback_executed`, `buyback_cancelled`.
+   * Events with unknown topics or already-ingested (contractId, ledger, txHash, topic)
+   * combinations are skipped.
+   */
+  async ingestBuybackEvents(
+    events: SorobanContractEvent[],
+  ): Promise<BuybackEventIngestResult> {
+    let stored = 0;
+    let skipped = 0;
+
+    for (const event of events) {
+      const topic = event.topics.find((t) => BUYBACK_EVENT_TYPES[t] !== undefined);
+      if (!topic) {
+        skipped++;
+        continue;
+      }
+
+      const eventType = BUYBACK_EVENT_TYPES[topic];
+
+      const existing = await this.buybackEventRepo.findOne({
+        where: {
+          contractId: event.contractId,
+          ledger: event.ledger,
+          txHash: event.txHash,
+          eventType,
+        },
+      });
+      if (existing) {
+        skipped++;
+        continue;
+      }
+
+      const record = this.buybackEventRepo.create({
+        contractId: event.contractId,
+        ledger: event.ledger,
+        txHash: event.txHash,
+        eventType,
+        topic,
+        payload: event.value ?? {},
+        occurredAt: event.occurredAt ?? new Date(),
+      });
+
+      try {
+        await this.buybackEventRepo.save(record);
+        stored++;
+      } catch (err: any) {
+        // Unique constraint race — another instance ingested the same event.
+        this.logger.warn(
+          `Failed to store buyback event ${topic} (ledger ${event.ledger}): ${err.message}`,
+        );
+        skipped++;
+      }
+    }
+
+    if (stored > 0) {
+      this.logger.log(`Stored ${stored} buyback event(s) (${skipped} skipped)`);
+    }
+
+    return { stored, skipped };
+  }
+
+  /** Retrieve stored buyback events, newest first. */
+  async getBuybackEvents(options: {
+    contractId?: string;
+    eventType?: BuybackEventType;
+    limit?: number;
+  } = {}): Promise<BuybackEvent[]> {
+    const where: Record<string, unknown> = {};
+    if (options.contractId) where.contractId = options.contractId;
+    if (options.eventType) where.eventType = options.eventType;
+
+    return this.buybackEventRepo.find({
+      where,
+      order: { occurredAt: 'DESC', ledger: 'DESC' },
+      take: options.limit ?? 100,
+    });
   }
 
   /** Hourly: aggregate all courses */

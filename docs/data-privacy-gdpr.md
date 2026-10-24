@@ -109,11 +109,27 @@ GDPR Article 20 grants users the **right to data portability** — the right to 
 
 ### Current State
 
-A dedicated data export endpoint does not yet exist. The following implementation is required to achieve GDPR compliance.
+A `GET /v1/users/:id/export` endpoint returns a ZIP archive of all personal data held for the authenticated user. The archive contains the database-backed data (`profile.json`, `enrollments.json`, `progress.json`, `notifications.json`, `kyc.json`) plus a `blockchain-records.json` file with the user's on-chain records fetched from Stellar/Horizon.
 
-### Required Implementation
+### Implementation
 
-Add a `GET /v1/users/:id/export` endpoint that returns all personal data held for the authenticated user:
+```typescript
+// users.controller.ts
+@Get(':id/export')
+@UseGuards(JwtAuthGuard)
+@ApiOperation({ summary: 'Export all personal data for the authenticated user (GDPR Art. 20)' })
+async exportData(
+  @Param('id') id: string,
+  @Request() req: { user: { id: string } },
+  @Res() res: Response,
+) {
+  if (req.user.id !== id) throw new ForbiddenException();
+  const zip = await this.usersService.exportUserData(id);
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="export-${id}.zip"`);
+  res.send(zip);
+}
+```
 
 ```typescript
 // users.controller.ts
@@ -146,20 +162,116 @@ async exportUserData(id: string) {
 }
 ```
 
-The response must be JSON (or optionally CSV) and must cover all tables that reference the user's ID.
+The export is a ZIP archive containing one JSON file per data category and must cover all tables that reference the user's ID as well as the user's on-chain records.
 
 ### Data Export Scope
 
 A complete export must include:
 
-| Data category | Source |
-|---|---|
-| Profile (email, username, avatar, bio, stellarPublicKey, role, createdAt) | `users` table |
-| KYC status and provider reference | `kyc_customers` table |
-| Course enrollments | `enrollments` table |
-| Course progress | `progress` table |
-| Notifications | `notifications` table |
-| Credentials issued | Stellar ledger (transaction hashes) |
+| Data category | Source | File in ZIP |
+|---|---|---|
+| Profile (email, username, avatar, bio, stellarPublicKey, role, createdAt) | `users` table | `profile.json` |
+| KYC status and provider reference | `kyc_customers` table | `kyc.json` |
+| Course enrollments | `enrollments` table | `enrollments.json` |
+| Course progress | `progress` table | `progress.json` |
+| Notifications | `notifications` table | `notifications.json` |
+| Credentials issued, token transactions, on-chain progress | Stellar/Horizon API | `blockchain-records.json` |
+
+### Blockchain Records (`blockchain-records.json`)
+
+The export job queries the Stellar/Horizon API for the user's `stellarPublicKey` and includes all transactions that touch the user's account, formatted in a human-readable structure:
+
+```json
+{
+  "exportedAt": "2024-01-01T00:00:00.000Z",
+  "stellarPublicKey": "G...",
+  "credentials": [
+    {
+      "courseId": "stellar-basics",
+      "transactionHash": "abc123...",
+      "issuedAt": "2024-01-01T00:00:00.000Z",
+      "ledger": 123456
+    }
+  ],
+  "tokenTransactions": [
+    {
+      "transactionHash": "def456...",
+      "amount": "10.0000000",
+      "asset": "SCOOP",
+      "direction": "received",
+      "createdAt": "2024-01-02T00:00:00.000Z"
+    }
+  ],
+  "progressEvents": [
+    {
+      "transactionHash": "ghi789...",
+      "courseId": "stellar-basics",
+      "lessonId": "lesson-1",
+      "completedAt": "2024-01-03T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+Horizon results are paginated; the export job follows the `next` cursor until all pages are consumed, with a bounded page limit so the export completes within 5 minutes for a typical account. If the user has no `stellarPublicKey`, `blockchain-records.json` is still included with empty arrays.
+
+> **Note:** On-chain records are **immutable** and cannot be deleted or modified. They are included in the export for transparency but cannot be erased in response to a deletion request (see [Data Deletion Procedures](#data-deletion-procedures)).
+
+---
+
+## Survey Response Pseudonymization
+
+Survey responses are frequently collected under a promise of anonymity, so analytics exports must not allow answers to be correlated back to an individual. The survey module therefore **pseudonymizes** the respondent identifier before any export.
+
+### How `pseudoId` Is Derived
+
+Each exported survey response row contains a `pseudoId` instead of the raw `userId`. The `pseudoId` is computed as an HMAC-SHA256 of the `userId`, keyed with a server-side secret:
+
+```typescript
+import { createHmac } from 'crypto';
+
+function pseudonymize(userId: string): string {
+  return createHmac('sha256', process.env.SURVEY_PSEUDONYMIZATION_SECRET!)
+    .update(userId)
+    .digest('hex');
+}
+```
+
+Properties of this scheme:
+
+- **Deterministic** — the same `userId` always yields the same `pseudoId` for a given secret, so responses from one respondent can still be grouped for aggregate analytics.
+- **Non-reversible without the secret** — the HMAC key is required to test candidate IDs, so the export alone cannot be used to re-identify respondents.
+- **No raw identifiers in exports** — the survey export CSV contains only `pseudoId`, never `userId`, email, or username.
+
+### Secret Management
+
+`SURVEY_PSEUDONYMIZATION_SECRET` is a server-side secret:
+
+- It is configured only via environment variables (see `.env.example`) and is never exposed to the frontend or included in API responses.
+- It must be a high-entropy random value (e.g. `openssl rand -hex 32`).
+- It must be stored in the secrets manager used for production (AWS Secrets Manager / SSM) and never committed to the repository.
+- **Rotating the secret changes every `pseudoId`.** Historical exports will no longer join with new ones. If rotation is required, keep the previous secret available for a transition period or re-derive and re-export affected data.
+
+### Admin-Only Resolution Endpoint
+
+For legitimate investigations (e.g. a legal request or an abuse report), admins can resolve a `pseudoId` back to a `userId` via a dedicated endpoint:
+
+```http
+POST /v1/admin/surveys/responses/resolve
+Authorization: Bearer <admin-jwt>
+Content-Type: application/json
+
+{ "pseudoId": "<hex hmac>" }
+```
+
+- The endpoint is guarded by the admin role (`RolesGuard` with `Role.ADMIN`); non-admin callers receive `403 Forbidden`.
+- Every resolution attempt is **audit logged** — the requesting admin's `userId`, the requested `pseudoId`, the resolved `userId` (if any), the timestamp, and the source IP are recorded so that de-anonymization is itself accountable.
+- Resolution should be used only when strictly necessary and the justification recorded in the audit trail.
+
+### Data Minimisation Notes
+
+- Survey responses are stored with the `userId` in the primary database (needed for submission integrity and duplicate prevention), but that link is never included in analytics exports.
+- When a user is hard-deleted, their survey responses should be anonymised or deleted in line with the retention policy below.
 
 ---
 
@@ -204,7 +316,7 @@ async hardDelete(id: string) {
 }
 ```
 
-> **Note:** On-chain Stellar records (credentials, `ManageData` entries) are **immutable** and cannot be deleted. This is a known limitation of blockchain-based credential systems and should be disclosed in the platform's privacy notice. Only the Stellar public key (pseudonymous) is stored on-chain.
+> **Note:** On-chain Stellar records (credentials, token transactions, progress events, `ManageData` entries) are **immutable** and cannot be deleted. This is a known limitation of blockchain-based credential systems and should be disclosed in the platform's privacy notice. Only the Stellar public key (pseudonymous) is stored on-chain. These records are included in the GDPR data export (`blockchain-records.json`) but cannot be removed by a deletion request.
 
 #### Admin-Triggered Deletion
 
@@ -324,10 +436,10 @@ async purgeDeletedUsers() {
 
 | Right | GDPR Article | Current support | Action required |
 |---|---|---|---|
-| Right of access | Art. 15 | Partial (profile via `GET /users/:id`) | Full export endpoint |
+| Right of access | Art. 15 | ✅ `GET /users/:id/export` (DB + on-chain) | — |
 | Right to rectification | Art. 16 | ✅ `PATCH /users/:id` | — |
-| Right to erasure | Art. 17 | Partial (soft delete only) | Hard delete / anonymisation |
-| Right to data portability | Art. 20 | ❌ Not implemented | Export endpoint |
+| Right to erasure | Art. 17 | Partial (soft delete only; on-chain records immutable) | Hard delete / anonymisation |
+| Right to data portability | Art. 20 | ✅ `GET /users/:id/export` ZIP incl. `blockchain-records.json` | — |
 | Right to restrict processing | Art. 18 | Partial (ban flag) | Formal restriction mechanism |
 | Right to object | Art. 21 | ❌ Not implemented | Opt-out mechanism |
 

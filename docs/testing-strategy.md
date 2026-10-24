@@ -303,6 +303,109 @@ Frontend pact tests  →  pacts/*.json  →  Backend provider verification
 - Never manually edit pact JSON files — they are generated artefacts.
 - Add a `stateHandler` for every provider state referenced in consumer tests.
 
+### CI Workflow (Consumer-Driven Contract Testing)
+
+Pact verification is wired into CI and runs on every pull request. The workflow has two
+jobs that run in sequence:
+
+1. **`pact-consumer`** — runs the frontend consumer tests and publishes the generated
+   pact files as a CI artifact.
+2. **`pact-provider`** — downloads the pact artifact, boots the backend, and runs
+   `apps/backend/test/pact.provider.spec.ts` against it.
+
+```yaml
+pact-consumer:
+  runs-on: ubuntu-latest
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20
+    - run: npm ci
+    - name: Run consumer contract tests
+      run: npm run test:pact --workspace=apps/frontend
+    - name: Upload pact files
+      uses: actions/upload-artifact@v4
+      with:
+        name: pacts
+        path: apps/frontend/pacts/*.json
+        if-no-files-found: error
+
+pact-provider:
+  runs-on: ubuntu-latest
+  needs: pact-consumer
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20
+    - run: npm ci
+    - name: Download pact files
+      uses: actions/download-artifact@v4
+      with:
+        name: pacts
+        path: pacts
+    - name: Start backend
+      run: npm run start:dev --workspace=apps/backend &
+    - name: Wait for backend
+      run: npx wait-on http://localhost:3000/health --timeout 60000
+    - name: Verify provider against pacts
+      run: npm run test:pact --workspace=apps/backend
+      env:
+        PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
+```
+
+#### Pact source: local files vs. broker
+
+The provider verification resolves pacts in this order:
+
+- **Local files (default in CI):** pact JSON files downloaded from the `pacts` artifact
+  into the repository-root `pacts/` directory (or `apps/frontend/pacts/` when running
+  locally). No broker is required.
+- **Pact Broker:** if `PACT_BROKER_BASE_URL` is set, the verifier fetches the latest
+  published pacts for the `Scoopdope-Frontend` consumer instead of reading local files.
+  Set `PACT_BROKER_TOKEN` as well if the broker requires authentication.
+
+```bash
+# Verify against local pact files
+npm run test:pact --workspace=apps/backend
+
+# Verify against a Pact Broker
+PACT_BROKER_BASE_URL=https://pact.example.com \
+PACT_BROKER_TOKEN=*** \
+npm run test:pact --workspace=apps/backend
+```
+
+#### Required status check
+
+The `pact-provider` job is configured as a **required status check** on the `main`
+branch protection rule. A PR cannot be merged until provider verification passes, so
+any contract regression between the frontend consumer and the backend provider fails
+the build and blocks the merge.
+
+### Debugging Pact Violations
+
+When provider verification fails, the output lists each failed interaction with the
+mismatch. Typical failure modes and fixes:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Status mismatch: expected 200, got 400` | Request body/validation changed on the provider | Align the DTO/validation with the consumer expectation, or update the consumer test if the change is intentional |
+| `Body mismatch: $.access_token` | Response shape changed (renamed/removed field) | Restore the field or update the consumer pact and re-run consumer tests |
+| `Missing state handler` | Consumer references a provider state with no handler | Add a `stateHandler` in `pact.provider.spec.ts` that seeds the required data |
+| `No pacts found` | Artifact not downloaded or wrong path | Check the `download-artifact` step and the `pactFiles` path in the verifier config |
+
+Debugging steps:
+
+1. Reproduce locally: run consumer tests (`npm run test:pact --workspace=apps/frontend`),
+   copy the generated pact into `pacts/`, start the backend, then run
+   `npm run test:pact --workspace=apps/backend`.
+2. Inspect the failing interaction in the pact JSON to see the exact expected request
+   and response.
+3. If the contract change is intentional, update the consumer test first, regenerate the
+   pact, and re-run provider verification — never hand-edit pact JSON.
+4. Re-run the CI job; the `pact-provider` check must be green before merge.
+
 ---
 
 ## 6. Load Testing with k6

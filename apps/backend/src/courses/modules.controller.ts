@@ -301,6 +301,68 @@ export class ModulesController {
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('instructor', 'admin')
+  @Patch('courses/:courseId/modules/reorder')
+  @ApiOperation({
+    summary: 'Reorder modules within a course',
+    description:
+      'Reorders modules and recomputes the global lesson order across all modules atomically. Returns the updated module list with recomputed lesson counts and ordering.',
+  })
+  @ApiResponse({ status: 400, description: 'Bad request (invalid IDs or format)' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  @ApiResponse({ status: 404, description: 'Course or module not found' })
+  @ApiResponse({ status: 429, description: 'Too many requests' })
+  @ApiResponse({ status: 500, description: 'Internal server error' })
+  @ApiBody({
+    type: ReorderModulesDto,
+    description: 'Array of module IDs in desired order',
+    examples: {
+      example1: {
+        value: {
+          moduleIds: [
+            'a1b2c3d4-e5f6-4g7h-8i9j-0k1l2m3n4o5p',
+            'b2c3d4e5-f6g7-4h8i-9j0k-1l2m3n4o5p6q',
+            'c3d4e5f6-g7h8-4i9j-0k1l-2m3n4o5p6q7r',
+          ],
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Modules reordered successfully with recomputed lesson ordering',
+    schema: {
+      example: [
+        {
+          id: 'uuid-1',
+          title: 'Module 1',
+          order: 0,
+          lessonCount: 2,
+          lessons: [
+            { id: 'lesson-uuid-1', title: 'Lesson 1', order: 0, globalOrder: 0 },
+            { id: 'lesson-uuid-2', title: 'Lesson 2', order: 1, globalOrder: 1 },
+          ],
+        },
+        {
+          id: 'uuid-2',
+          title: 'Module 2',
+          order: 1,
+          lessonCount: 2,
+          lessons: [
+            { id: 'lesson-uuid-3', title: 'Lesson 3', order: 0, globalOrder: 2 },
+            { id: 'lesson-uuid-4', title: 'Lesson 4', order: 1, globalOrder: 3 },
+          ],
+        },
+      ],
+    },
+  })
+  reorderModules(@Param('courseId') courseId: string, @Body() dto: ReorderModulesDto) {
+    return this.modulesService.reorder(courseId, dto.moduleIds);
+  }
+
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('instructor', 'admin')
   @Patch('modules/:moduleId/lessons/reorder')
   @ApiOperation({ summary: 'Reorder lessons within a module' })
   @ApiResponse({ status: 400, description: 'Bad request (invalid IDs or format)' })

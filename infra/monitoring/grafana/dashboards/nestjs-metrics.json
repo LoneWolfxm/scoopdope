@@ -225,7 +225,7 @@
         "id": 15,
         "title": "Stellar RPC Latency p50 / p95 / p99",
         "type": "timeseries",
-        "gridPos": { "x": 8, "y": 20, "w": 8, "h": 6 },
+        "gridPos": { "x": 0, "y": 27, "w": 12, "h": 6 },
         "targets": [
           {
             "expr": "histogram_quantile(0.50, sum(rate(stellar_rpc_latency_seconds_bucket[5m])) by (le, method))",
@@ -268,10 +268,45 @@
         }
       },
       {
+        "id": 20,
+        "title": "Stellar RPC",
+        "type": "row",
+        "gridPos": { "x": 0, "y": 26, "w": 24, "h": 1 },
+        "collapsed": false,
+        "panels": []
+      },
+      {
+        "id": 21,
+        "title": "Stellar RPC Error Rate",
+        "type": "timeseries",
+        "gridPos": { "x": 12, "y": 27, "w": 8, "h": 6 },
+        "targets": [
+          {
+            "expr": "sum(rate(stellar_rpc_latency_seconds_count{status=~\"error|timeout\"}[5m])) / clamp_min(sum(rate(stellar_rpc_latency_seconds_count[5m])), 1e-9) * 100",
+            "legendFormat": "errors and timeouts (%)"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": { "unit": "percent" }
+        }
+      },
+      {
+        "id": 22,
+        "title": "Stellar RPC Timeouts (last 5m)",
+        "type": "stat",
+        "gridPos": { "x": 20, "y": 27, "w": 4, "h": 6 },
+        "targets": [
+          {
+            "expr": "sum(increase(stellar_rpc_timeouts_total[5m]))",
+            "legendFormat": "Timeouts"
+          }
+        ]
+      },
+      {
         "id": 17,
         "title": "Event Loop Lag",
         "type": "timeseries",
-        "gridPos": { "x": 0, "y": 26, "w": 8, "h": 6 },
+        "gridPos": { "x": 0, "y": 34, "w": 8, "h": 6 },
         "targets": [
           {
             "expr": "nodejs_eventloop_lag_seconds",
@@ -286,7 +321,7 @@
         "id": 18,
         "title": "CPU Usage",
         "type": "timeseries",
-        "gridPos": { "x": 8, "y": 26, "w": 8, "h": 6 },
+        "gridPos": { "x": 8, "y": 34, "w": 8, "h": 6 },
         "targets": [
           {
             "expr": "rate(process_cpu_user_seconds_total[1m])",
@@ -305,7 +340,7 @@
         "id": 19,
         "title": "Active Connections & DB Pool",
         "type": "timeseries",
-        "gridPos": { "x": 16, "y": 26, "w": 8, "h": 6 },
+        "gridPos": { "x": 16, "y": 34, "w": 8, "h": 6 },
         "targets": [
           {
             "expr": "app_active_connections",

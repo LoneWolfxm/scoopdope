@@ -1,0 +1,14 @@
+{
+  "event": "upg_exec",
+  "symbol": "upg_exec",
+  "topics": [
+    "upg_exec",
+    1
+  ],
+  "data": {
+    "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "new_wasm_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  "raw_bytes_footprint": 164,
+  "max_bytes_budget": 16384
+}

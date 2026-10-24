@@ -49,6 +49,9 @@ const THUMBNAIL_MIME_TYPES = new Set([
 /** 2 MB in bytes */
 const THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024;
 
+/** ISO 639-1 codes supported by the i18n system */
+const SUPPORTED_LANGUAGES = new Set(['en', 'fr', 'ar', 'es']);
+
 @ApiTags('courses')
 @Controller('v1/courses')
 export class CoursesController {
@@ -85,7 +88,8 @@ export class CoursesController {
   @ApiQuery({
     name: 'language',
     required: false,
-    description: 'Filter by BCP-47 language code (e.g. "en", "es", "fr", "ar")',
+    enum: ['en', 'fr', 'ar', 'es'],
+    description: 'Filter by ISO 639-1 language code (en, fr, ar, es)',
   })
   @ApiQuery({
     name: 'categoryId',
@@ -115,15 +119,95 @@ export class CoursesController {
     schema: { example: { data: [], total: 0, page: 1, limit: 20 } },
   })
   findAll(@Query() query: CourseQueryDto = {}) {
-    return this.coursesService.findAll(query);
+    return this.coursesService.findAll({
+      ...query,
+      language: this.normalizeLanguage(query.language),
+    });
+  }
+
+  /**
+   * Validates the optional `difficulty` query param against the allowed levels.
+   * Returns `undefined` when the param is absent so the service can auto-detect.
+   */
+  private parseDifficulty(
+    difficulty?: string,
+  ): 'beginner' | 'intermediate' | 'advanced' | undefined {
+    if (difficulty === undefined || difficulty === null || difficulty === '') {
+      return undefined;
+    }
+    const normalized = String(difficulty).trim().toLowerCase();
+    if (
+      normalized !== 'beginner' &&
+      normalized !== 'intermediate' &&
+      normalized !== 'advanced'
+    ) {
+      throw new BadRequestException(
+        'difficulty must be one of: beginner, intermediate, advanced',
+      );
+    }
+    return normalized;
+  }
+
+  @Get('recommendations')
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiOperation({
+    summary: 'Get difficulty-aware course recommendations for the current learner',
+  })
+  @ApiQuery({
+    name: 'difficulty',
+    required: false,
+    enum: ['beginner', 'intermediate', 'advanced'],
+    description:
+      'Override the auto-detected learner level (defaults to the level derived from completed courses, or beginner when there is no history)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Returns courses at most one level above the learner level',
+    schema: { example: { data: [], learnerLevel: 'beginner', difficulty: 'beginner' } },
+  })
+  @ApiResponse({ status: 400, description: 'Invalid difficulty value' })
+  recommendations(
+    @Query('difficulty') difficulty?: string,
+    @Request() req?: { user?: { id: string; role: string } },
+  ) {
+    const override = this.parseDifficulty(difficulty);
+    return this.coursesService.getRecommendations(req?.user?.id, override);
   }
 
   @Get('search')
   @ApiOperation({ summary: 'Search published courses by title and description' })
   @ApiQuery({ name: 'q', required: false, description: 'Search query; empty returns all courses' })
+  @ApiQuery({
+    name: 'language',
+    required: false,
+    enum: ['en', 'fr', 'ar', 'es'],
+    description: 'Filter by ISO 639-1 language code (en, fr, ar, es)',
+  })
   @ApiResponse({ status: 200, description: 'Ranked, paginated course search results' })
   search(@Query() query: CourseQueryDto) {
-    return this.coursesService.search(query.q ?? query.search ?? '', query.page, query.limit);
+    return this.coursesService.search(
+      query.q ?? query.search ?? '',
+      query.page,
+      query.limit,
+      this.normalizeLanguage(query.language),
+    );
+  }
+
+  /**
+   * Validates and normalizes the `language` query param.
+   * Returns undefined when absent; throws 400 for unsupported codes.
+   */
+  private normalizeLanguage(language?: string): string | undefined {
+    if (language === undefined || language === null || language === '') {
+      return undefined;
+    }
+    const normalized = String(language).trim().toLowerCase();
+    if (!SUPPORTED_LANGUAGES.has(normalized)) {
+      throw new BadRequestException(
+        `Unsupported language "${language}". Supported values: ${[...SUPPORTED_LANGUAGES].join(', ')}`,
+      );
+    }
+    return normalized;
   }
 
   @Get(':id')

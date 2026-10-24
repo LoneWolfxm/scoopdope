@@ -22,6 +22,12 @@ export enum CourseStatus {
   ARCHIVED = 'archived',
 }
 
+export enum CourseDifficulty {
+  BEGINNER = 'beginner',
+  INTERMEDIATE = 'intermediate',
+  ADVANCED = 'advanced',
+}
+
 @Entity('courses')
 export class Course {
   @PrimaryGeneratedColumn('uuid')
@@ -33,11 +39,15 @@ export class Course {
   @Column('text')
   description: string;
 
+  @Column({ nullable: true })
+  category: string;
+
+  /** @deprecated use difficultyLevel instead */
   @Column({ default: 'beginner' })
   level: string;
 
-  /** BCP-47 language code, e.g. "en", "es", "fr", "ar" */
-  @Column({ default: 'en' })
+  /** ISO 639-1 language code of the course content: "en", "fr", "ar", "es" */
+  @Column({ type: 'varchar', length: 2, default: 'en' })
   language: string;
 
   @Column({ default: 0 })

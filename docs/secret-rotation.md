@@ -17,23 +17,70 @@ Authorization: Bearer <jwt>
 ```
 Returns a new raw API key. The old key is immediately invalidated.
 
-## JWT Signing Keys
+## Automated Rotation via AWS Secrets Manager
 
-JWT secrets are configured via the `JWT_SECRET` environment variable. To rotate:
+Critical secrets are stored in AWS Secrets Manager and rotated automatically by rotation Lambdas. Rotation is configured in Terraform (`infra/terraform/secrets.tf`); do not rotate these secrets by hand except in an emergency (see below).
 
-1. Generate a new secret: `openssl rand -hex 64`
-2. Update `JWT_SECRET` in your environment/secrets manager
-3. Restart the application — all existing tokens will be invalidated
-4. Users will need to re-authenticate
+| Secret | Rotation mechanism | Schedule |
+| --- | --- | --- |
+| `JWT_SECRET` | Custom rotation Lambda (`jwt-secret-rotation`) | Every **30 days** |
+| `DATABASE_PASSWORD` | AWS-managed RDS rotation Lambda (`SecretsManagerRDSMySQLRotationSingleUser` / `...PostgreSQL...`) | Every **30 days** |
+| `PAYMENT_WEBHOOK_SECRET` | Custom rotation Lambda (`payment-webhook-secret-rotation`) | Every **30 days** |
 
-**Note:** For zero-downtime rotation, implement a `JWT_SECRET_PREVIOUS` env var and accept both during a transition window.
+### JWT Signing Keys (`JWT_SECRET`)
 
-## Database Password Rotation
+The rotation Lambda generates a new secret with `openssl rand -hex 64` and stores it as `AWSCURRENT`, moving the old value to `AWSPREVIOUS`. The application reads both `JWT_SECRET` (from `AWSCURRENT`) and `JWT_SECRET_PREVIOUS` (from `AWSPREVIOUS`) and accepts tokens signed with either during the transition window, so existing sessions are not invalidated mid-rotation. After the next rotation, `AWSPREVIOUS` is replaced and tokens signed with the older key are rejected.
 
-1. Generate a new password in your secrets manager (AWS Secrets Manager, Vault, etc.)
-2. Update the database user password
-3. Update `DATABASE_PASSWORD` environment variable
-4. Restart the application
+### Database Password (`DATABASE_PASSWORD`)
+
+Rotation is handled entirely by the AWS-managed RDS rotation Lambda, which uses the Secrets Manager rotation protocol (`createSecret`, `setSecret`, `testSecret`, `finishSecret`) to change the password on the database user and update the secret. The application pool reconnects automatically; no restart is required.
+
+### Payment Webhook Secret (`PAYMENT_WEBHOOK_SECRET`)
+
+The rotation Lambda generates a new HMAC signing secret and stores it as `AWSCURRENT`, keeping the old value as `AWSPREVIOUS`. The webhook verifier accepts signatures from both secrets during the transition window so in-flight provider callbacks are not rejected.
+
+## Rotation Notifications
+
+Every rotation Lambda publishes a message to the `secret-rotation-events` SNS topic on success and on failure. The topic is subscribed by the monitoring Slack integration, which posts to the `#monitoring` channel. Notifications include the secret name, environment, rotation outcome, and the Lambda request ID.
+
+If a rotation fails, the Lambda retries per the Secrets Manager rotation schedule and the failure notification is posted to Slack. Treat a failed rotation notification as an incident.
+
+## Emergency Manual Rotation Procedure
+
+Use this only when a secret is believed compromised or automated rotation is broken.
+
+1. **Announce** in `#monitoring` that you are performing an emergency rotation and which secret is affected.
+2. **Disable automatic rotation** for the secret so it does not race with your manual change:
+   ```
+   aws secretsmanager cancel-rotate-secret --secret-id <secret-name>
+   ```
+3. **Generate and store the new value** using the Secrets Manager CLI so the secret versioning (`AWSCURRENT`/`AWSPREVIOUS`) stays consistent:
+   ```
+   aws secretsmanager put-secret-value \
+     --secret-id <secret-name> \
+     --secret-string '<new-value>' \
+     --version-stages AWSCURRENT
+   ```
+   For `JWT_SECRET` and `PAYMENT_WEBHOOK_SECRET`, keep the old value available as `AWSPREVIOUS` so the application continues to accept tokens/signatures during the transition.
+4. **For `DATABASE_PASSWORD`**, also update the password on the database user (`ALTER USER ... IDENTIFIED BY ...`) before or immediately after storing the new secret value, then verify the application can connect.
+5. **Verify** the application is healthy (auth flows, DB connections, webhook processing) and watch `#monitoring` for errors.
+6. **Re-enable automatic rotation**:
+   ```
+   aws secretsmanager rotate-secret --secret-id <secret-name>
+   ```
+7. **Record** the rotation in the `secret_rotations` table (see Rotation Log below) and follow up with a post-incident note.
+
+## Staging Validation Before Production
+
+Never enable a new or changed rotation configuration in production without first validating it in staging:
+
+1. Apply the Terraform changes to the staging environment.
+2. Trigger a rotation manually in staging:
+   ```
+   aws secretsmanager rotate-secret --secret-id <secret-name>
+   ```
+3. Confirm the rotation Lambda succeeds, the Slack notification arrives in `#monitoring`, and the application continues to function (login, DB queries, webhook processing) throughout the rotation.
+4. Only after a successful staging rotation, promote the configuration to production.
 
 ## Stellar Account Key Rotation
 

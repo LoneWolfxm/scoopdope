@@ -4,6 +4,14 @@ use soroban_sdk::{
 };
 
 #[contracttype]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LimitType {
+    Daily,
+    Weekly,
+    PerTransfer,
+}
+
+#[contracttype]
 pub enum DataKey {
     Admin,
     Whitelist(Address),
@@ -12,6 +20,7 @@ pub enum DataKey {
     PendingApprovals(Address, Address),
     Vesting(Address),
     LockUp(Address),
+    Limit(LimitType),
 }
 
 #[contracttype]
@@ -36,6 +45,25 @@ const LIMIT_SET: Symbol = symbol_short!("limit");
 const APPROVAL_REQ: Symbol = symbol_short!("appr");
 const VESTING_SET: Symbol = symbol_short!("vest");
 const LOCKUP_SET: Symbol = symbol_short!("lock");
+const LIMIT_CFG_SET: Symbol = symbol_short!("limcfg");
+
+/// Upper bound for any configurable transfer limit.
+pub const MAX_LIMIT: i128 = 1_000_000_000_000_000_000;
+
+/// Default daily transfer limit.
+pub const DEFAULT_DAILY_LIMIT: i128 = 1_000_000_000;
+/// Default weekly transfer limit.
+pub const DEFAULT_WEEKLY_LIMIT: i128 = 5_000_000_000;
+/// Default per-transfer limit.
+pub const DEFAULT_PER_TRANSFER_LIMIT: i128 = 100_000_000;
+
+fn default_limit(limit_type: LimitType) -> i128 {
+    match limit_type {
+        LimitType::Daily => DEFAULT_DAILY_LIMIT,
+        LimitType::Weekly => DEFAULT_WEEKLY_LIMIT,
+        LimitType::PerTransfer => DEFAULT_PER_TRANSFER_LIMIT,
+    }
+}
 
 #[contract]
 pub struct TokenRestrictionsContract;
@@ -49,6 +77,17 @@ impl TokenRestrictionsContract {
         );
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
+
+        // Seed default runtime transfer limits.
+        env.storage()
+            .persistent()
+            .set(&DataKey::Limit(LimitType::Daily), &DEFAULT_DAILY_LIMIT);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Limit(LimitType::Weekly), &DEFAULT_WEEKLY_LIMIT);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Limit(LimitType::PerTransfer), &DEFAULT_PER_TRANSFER_LIMIT);
     }
 
     pub fn add_to_whitelist(env: Env, admin: Address, account: Address) {
@@ -126,6 +165,26 @@ impl TokenRestrictionsContract {
             .instance()
             .get(&DataKey::TransferLimit(account))
             .unwrap_or(i128::MAX)
+    }
+
+    pub fn set_limit(env: Env, admin: Address, limit_type: LimitType, value: i128) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        assert!(admin == stored_admin, "Only admin can set limits");
+        assert!(value > 0, "Limit must be positive");
+        assert!(value <= MAX_LIMIT, "Limit exceeds maximum");
+        env.storage()
+            .persistent()
+            .set(&DataKey::Limit(limit_type), &value);
+        env.events()
+            .publish((LIMIT_CFG_SET, symbol_short!("set")), (limit_type, value));
+    }
+
+    pub fn get_limit(env: Env, limit_type: LimitType) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Limit(limit_type))
+            .unwrap_or_else(|| default_limit(limit_type))
     }
 
     pub fn request_transfer_approval(env: Env, from: Address, to: Address, amount: i128) {
@@ -221,5 +280,69 @@ impl TokenRestrictionsContract {
             None => return false,
         };
         env.ledger().sequence() < lockup.unlock_ledger
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::Env;
+
+    fn setup() -> (Env, TokenRestrictionsContractClient<'static>, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, TokenRestrictionsContract);
+        let client = TokenRestrictionsContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+        (env, client, admin)
+    }
+
+    #[test]
+    fn get_returns_seeded_defaults() {
+        let (_env, client, _admin) = setup();
+        assert_eq!(client.get_limit(&LimitType::Daily), DEFAULT_DAILY_LIMIT);
+        assert_eq!(client.get_limit(&LimitType::Weekly), DEFAULT_WEEKLY_LIMIT);
+        assert_eq!(
+            client.get_limit(&LimitType::PerTransfer),
+            DEFAULT_PER_TRANSFER_LIMIT
+        );
+    }
+
+    #[test]
+    fn set_updates_limit() {
+        let (_env, client, admin) = setup();
+        client.set_limit(&admin, &LimitType::Daily, &42);
+        assert_eq!(client.get_limit(&LimitType::Daily), 42);
+        // Other limits are unaffected.
+        assert_eq!(client.get_limit(&LimitType::Weekly), DEFAULT_WEEKLY_LIMIT);
+    }
+
+    #[test]
+    #[should_panic(expected = "Limit must be positive")]
+    fn set_rejects_non_positive() {
+        let (_env, client, admin) = setup();
+        client.set_limit(&admin, &LimitType::Daily, &0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Limit exceeds maximum")]
+    fn set_rejects_above_max() {
+        let (_env, client, admin) = setup();
+        client.set_limit(&admin, &LimitType::Daily, &(MAX_LIMIT + 1));
+    }
+
+    #[test]
+    #[should_panic(expected = "Only admin can set limits")]
+    fn set_rejects_non_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, TokenRestrictionsContract);
+        let client = TokenRestrictionsContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+        let non_admin = Address::generate(&env);
+        client.set_limit(&non_admin, &LimitType::Daily, &10);
     }
 }

@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { StellarService } from './stellar.service';
+import { MetricsService } from '../metrics/metrics.service';
 
 describe('StellarService - Graceful Shutdown', () => {
   let service: StellarService;
@@ -41,6 +42,13 @@ describe('StellarService - Graceful Shutdown', () => {
         {
           provide: CACHE_MANAGER,
           useValue: mockCache,
+        },
+        {
+          provide: MetricsService,
+          useValue: {
+            observeStellarRpcLatency: jest.fn(),
+            incrementStellarRpcTimeout: jest.fn(),
+          },
         },
       ],
     }).compile();
@@ -227,6 +235,13 @@ describe('StellarService - Graceful Shutdown', () => {
           {
             provide: CACHE_MANAGER,
             useValue: { get: jest.fn(), set: jest.fn() },
+          },
+          {
+            provide: MetricsService,
+            useValue: {
+              observeStellarRpcLatency: jest.fn(),
+              incrementStellarRpcTimeout: jest.fn(),
+            },
           },
         ],
       }).compile();

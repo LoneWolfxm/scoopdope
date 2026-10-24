@@ -105,8 +105,45 @@ cp ../api/swagger-ui.html ../../docs/api/dist/index.html
 ## Accessing Documentation
 
 Once deployed, the API documentation will be available at:
-- **Production**: https://nonso-eze.github.io/scoopdope/
+- **Production (static export)**: https://nonso-eze.github.io/scoopdope/
 - **Local**: http://localhost:3000/api/docs
+
+## Production Swagger Access Policy
+
+The live Swagger UI served by the backend at `/api/docs` is **disabled by default in production** to prevent unauthenticated reconnaissance of the API surface.
+
+### Behavior by environment
+
+| Environment | `NODE_ENV` | Swagger at `/api/docs` |
+| --- | --- | --- |
+| Local | `development` (or unset) | Served normally, no auth |
+| Staging | `staging` | Served normally, no auth |
+| Production | `production` | Returns `404` unless explicitly enabled |
+
+### Enabling Swagger in production
+
+Swagger can be re-enabled in production by setting `SWAGGER_ENABLED=true`. When enabled in production, the docs are protected by **HTTP Basic Auth**:
+
+- Username: `admin`
+- Password: the value of the `SWAGGER_PASSWORD` environment variable
+
+If `SWAGGER_ENABLED=true` is set in production without a `SWAGGER_PASSWORD`, the docs remain disabled (fail closed).
+
+### Configuration
+
+Add the following to your environment (see `.env.example`):
+
+```bash
+# Set to "true" to enable Swagger UI in production (protected by Basic Auth)
+SWAGGER_ENABLED=false
+
+# Password for HTTP Basic Auth on /api/docs when enabled in production
+SWAGGER_PASSWORD=
+```
+
+### GitHub Pages
+
+The static documentation export deployed to GitHub Pages is generated at build time and is **unaffected** by the runtime Swagger guard. The workflow above continues to export the OpenAPI spec and publish it independently of `SWAGGER_ENABLED` / `SWAGGER_PASSWORD`.
 
 ## Updating Documentation
 

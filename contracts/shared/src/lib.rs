@@ -2,6 +2,7 @@
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol, Vec};
 
 pub mod pausable;
+pub mod reentrancy;
 
 #[contracttype]
 #[derive(Clone, PartialEq)]
@@ -46,6 +47,7 @@ pub enum DataKey {
     CurrentVersion,                      // u32
     MigratedVersion,                     // u32
     Version,                             // String semver
+    ReentrancyLock,                      // bool reentrancy guard
 }
 
 #[contract]

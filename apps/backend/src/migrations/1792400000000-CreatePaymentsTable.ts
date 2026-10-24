@@ -1,4 +1,4 @@
-import { MigrationInterface, QueryRunner, Table, TableIndex } from 'typeorm';
+import { MigrationInterface, QueryRunner, Table, TableColumn, TableIndex } from 'typeorm';
 
 export class CreatePaymentsTable1792400000000 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
@@ -35,5 +35,37 @@ export class CreatePaymentsTable1792400000000 implements MigrationInterface {
 
   public async down(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.dropTable('payments', true);
+  }
+}
+
+export class AddPayoutCurrencyAndExchangeRate1792500000000 implements MigrationInterface {
+  public async up(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.addColumns('payouts', [
+      new TableColumn({
+        name: 'payoutCurrency',
+        type: 'varchar',
+        length: '3',
+        default: "'USD'",
+        isNullable: false,
+      }),
+      new TableColumn({
+        name: 'exchangeRate',
+        type: 'decimal',
+        precision: 18,
+        scale: 8,
+        isNullable: true,
+      }),
+      new TableColumn({
+        name: 'exchangeRateTimestamp',
+        type: 'timestamptz',
+        isNullable: true,
+      }),
+    ]);
+  }
+
+  public async down(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.dropColumn('payouts', 'exchangeRateTimestamp');
+    await queryRunner.dropColumn('payouts', 'exchangeRate');
+    await queryRunner.dropColumn('payouts', 'payoutCurrency');
   }
 }

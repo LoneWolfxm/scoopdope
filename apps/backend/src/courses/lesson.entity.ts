@@ -45,6 +45,11 @@ export class Lesson {
   @Column({ default: 0 })
   order: number;
 
+  // Why: persists the effective global lesson order across modules so that
+  // reordering modules can recompute sequential navigation indices.
+  @Column({ type: 'int', default: 0 })
+  globalOrder: number;
+
   @Column({ default: 0 })
   durationMinutes: number;
 

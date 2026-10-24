@@ -14,6 +14,7 @@ pub enum DataKey {
     OwnerCertificates(Address),          // owner → Vec<u64>
     NextId,                              // u64 counter
     Revocation(u64),                     // id → RevocationRecord
+    Revoked(u64),                        // id → bool revocation flag
 }
 
 // =============================================================================
@@ -177,6 +178,9 @@ impl CertificateContract {
         env.storage()
             .persistent()
             .set(&DataKey::Revocation(cert_id), &revocation);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Revoked(cert_id), &true);
 
         env.events()
             .publish((REVOKE, symbol_short!("cert_id")), (cert_id, reason));
@@ -185,7 +189,22 @@ impl CertificateContract {
     pub fn is_revoked(env: Env, cert_id: u64) -> bool {
         env.storage()
             .persistent()
-            .has(&DataKey::Revocation(cert_id))
+            .get(&DataKey::Revoked(cert_id))
+            .unwrap_or(false)
+    }
+
+    pub fn is_valid(env: Env, cert_id: u64) -> bool {
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::Certificate(cert_id))
+        {
+            return false;
+        }
+        !env.storage()
+            .persistent()
+            .get::<DataKey, bool>(&DataKey::Revoked(cert_id))
+            .unwrap_or(false)
     }
 
     pub fn get_revocation(env: Env, cert_id: u64) -> Option<RevocationRecord> {
@@ -324,13 +343,32 @@ mod tests {
 
         let id = client.mint_certificate(&admin, &owner, &course, &url);
         assert!(!client.is_revoked(&id));
+        assert!(client.is_valid(&id));
 
         client.revoke_certificate(&admin, &id, &reason);
         assert!(client.is_revoked(&id));
+        assert!(!client.is_valid(&id));
 
         let revocation = client.get_revocation(&id).unwrap();
         assert_eq!(revocation.certificate_id, id);
         assert_eq!(revocation.reason, reason);
+    }
+
+    #[test]
+    fn test_is_valid_for_issued_certificate() {
+        let (env, client, admin) = setup();
+        let owner = Address::generate(&env);
+        let course = symbol_short!("RUST101");
+        let url = String::from_str(&env, "https://example.com/cert");
+
+        let id = client.mint_certificate(&admin, &owner, &course, &url);
+        assert!(client.is_valid(&id));
+    }
+
+    #[test]
+    fn test_is_valid_false_for_missing_certificate() {
+        let (_, client, _) = setup();
+        assert!(!client.is_valid(&999));
     }
 
     #[test]

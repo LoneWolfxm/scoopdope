@@ -43,6 +43,10 @@ describe('StellarService', () => {
     set: jest.Mock;
     del: jest.Mock;
   };
+  let mockMetrics: {
+    observeStellarRpcLatency: jest.Mock;
+    incrementStellarRpcTimeout: jest.Mock;
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -60,6 +64,10 @@ describe('StellarService', () => {
       get: jest.fn().mockResolvedValue(null),
       set: jest.fn().mockResolvedValue(undefined),
       del: jest.fn().mockResolvedValue(undefined),
+    };
+    mockMetrics = {
+      observeStellarRpcLatency: jest.fn(),
+      incrementStellarRpcTimeout: jest.fn(),
     };
 
     (Horizon.Server as jest.Mock).mockImplementation(() => mockServer);
@@ -81,7 +89,7 @@ describe('StellarService', () => {
       }),
     };
 
-    service = new StellarService(mockConfigService as any, mockCache as any);
+    service = new StellarService(mockConfigService as any, mockCache as any, mockMetrics as any);
   });
 
   it('getAccountBalance should return balances from horizon account', async () => {
@@ -215,7 +223,7 @@ describe('StellarService', () => {
       };
 
       expect(() => {
-        new StellarService(mockConfigServiceNoCreds as any, {} as any);
+        new StellarService(mockConfigServiceNoCreds as any, {} as any, mockMetrics as any);
       }).not.toThrow(); // Constructor warns but doesn't throw
 
       // The service can be instantiated even without secret key

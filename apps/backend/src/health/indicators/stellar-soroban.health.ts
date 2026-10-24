@@ -31,7 +31,7 @@ export class StellarSorobanHealthIndicator extends HealthIndicator {
       const latencyMs = Date.now() - start;
       const data = response.data;
 
-      const healthy = data?.result?.status === 'healthy' || response.status === 200;
+      const healthy = response.status === 200 && data?.result?.status === 'healthy';
 
       if (healthy) {
         return this.getStatus(key, true, {

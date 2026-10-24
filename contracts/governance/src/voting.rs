@@ -51,7 +51,10 @@ pub fn create_proposal(
         .get(&GovernanceKey::QuorumPercentage)
         .unwrap_or(20); // 20% default
 
-    let quorum_required = (total_supply * quorum_percentage) / 100;
+    let quorum_required = total_supply
+        .checked_mul(quorum_percentage)
+        .and_then(|product| product.checked_div(100))
+        .expect("Quorum calculation overflow");
 
     let id: u64 = env
         .storage()
@@ -112,12 +115,23 @@ pub fn cast_vote(
 
     assert!(already_voted.is_none(), "Already voted");
 
+    assert!(weight >= 0, "Vote weight must be non-negative");
+
     if support {
-        proposal.votes_for += weight;
+        proposal.votes_for = proposal
+            .votes_for
+            .checked_add(weight)
+            .expect("votes_for overflow");
     } else {
-        proposal.votes_against += weight;
+        proposal.votes_against = proposal
+            .votes_against
+            .checked_add(weight)
+            .expect("votes_against overflow");
     }
-    proposal.total_votes += weight;
+    proposal.total_votes = proposal
+        .total_votes
+        .checked_add(weight)
+        .expect("total_votes overflow");
 
     env.storage()
         .instance()
@@ -183,4 +197,119 @@ pub fn get_delegate(env: &Env, delegator: Address) -> Option<Address> {
     env.storage()
         .instance()
         .get(&GovernanceKey::Delegate(delegator))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+
+    fn setup(env: &Env, supply: i128, quorum_percentage: i128) -> Address {
+        let proposer = Address::generate(env);
+        env.storage()
+            .instance()
+            .set(&GovernanceKey::TotalSupply, &supply);
+        env.storage()
+            .instance()
+            .set(&GovernanceKey::QuorumPercentage, &quorum_percentage);
+        proposer
+    }
+
+    #[test]
+    fn test_quorum_with_max_i128_supply() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let proposer = setup(&env, i128::MAX, 100);
+
+        let id = create_proposal(
+            &env,
+            proposer,
+            String::from_str(&env, "t"),
+            String::from_str(&env, "d"),
+            env.ledger().sequence() + 10,
+        );
+
+        let proposal = get_proposal(&env, id).unwrap();
+        assert_eq!(proposal.quorum_required, i128::MAX);
+    }
+
+    #[test]
+    fn test_quorum_large_supply_no_overflow() {
+        let env = Env::default();
+        env.mock_all_auths();
+        // 50 million voters * 100 tokens each = 5e9, well above u32 range
+        let supply: i128 = 5_000_000_000;
+        let proposer = setup(&env, supply, 20);
+
+        let id = create_proposal(
+            &env,
+            proposer,
+            String::from_str(&env, "t"),
+            String::from_str(&env, "d"),
+            env.ledger().sequence() + 10,
+        );
+
+        let proposal = get_proposal(&env, id).unwrap();
+        assert_eq!(proposal.quorum_required, 1_000_000_000);
+    }
+
+    #[test]
+    fn test_vote_tally_with_max_i128_weight() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let proposer = setup(&env, i128::MAX, 20);
+
+        let id = create_proposal(
+            &env,
+            proposer,
+            String::from_str(&env, "t"),
+            String::from_str(&env, "d"),
+            env.ledger().sequence() + 10,
+        );
+
+        let voter = Address::generate(&env);
+        cast_vote(&env, id, voter, true, i128::MAX);
+
+        let proposal = get_proposal(&env, id).unwrap();
+        assert_eq!(proposal.votes_for, i128::MAX);
+        assert_eq!(proposal.total_votes, i128::MAX);
+    }
+
+    #[test]
+    #[should_panic(expected = "total_votes overflow")]
+    fn test_vote_tally_overflow_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let proposer = setup(&env, i128::MAX, 20);
+
+        let id = create_proposal(
+            &env,
+            proposer,
+            String::from_str(&env, "t"),
+            String::from_str(&env, "d"),
+            env.ledger().sequence() + 10,
+        );
+
+        let voter_a = Address::generate(&env);
+        cast_vote(&env, id, voter_a, true, i128::MAX);
+
+        let voter_b = Address::generate(&env);
+        cast_vote(&env, id, voter_b, true, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Quorum calculation overflow")]
+    fn test_quorum_overflow_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let proposer = setup(&env, i128::MAX, 200);
+
+        create_proposal(
+            &env,
+            proposer,
+            String::from_str(&env, "t"),
+            String::from_str(&env, "d"),
+            env.ledger().sequence() + 10,
+        );
+    }
 }

@@ -7,6 +7,7 @@ module.exports = {
   },
   collectCoverageFrom: [
     '**/*.(t|j)s',
+    'kyc/**/*.(t|j)s',
   ],
   coverageDirectory: '../coverage',
   testEnvironment: 'node',

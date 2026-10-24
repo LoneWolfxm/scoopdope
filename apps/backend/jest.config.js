@@ -14,7 +14,10 @@ module.exports = {
   transformIgnorePatterns: [
     'node_modules/(?!(@scure|@otplib|@noble|otplib|p-retry|is-network-error|retry)/)',
   ],
-  collectCoverageFrom: ['**/*.(t|j)s'],
+  collectCoverageFrom: [
+    '**/*.(t|j)s',
+    'kyc/**/*.(t|j)s',
+  ],
   coverageDirectory: '../coverage',
   coverageReporters: ['text', 'lcov', 'html'],
   coverageThreshold: {
@@ -23,6 +26,12 @@ module.exports = {
       functions: 50,
       lines: 50,
       statements: 50
+    },
+    './kyc/**': {
+      branches: 90,
+      functions: 90,
+      lines: 90,
+      statements: 90
     }
   },
   testEnvironment: 'node',

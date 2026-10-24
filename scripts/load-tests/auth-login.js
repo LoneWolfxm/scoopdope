@@ -10,10 +10,17 @@ export const options = {
   thresholds: {
     http_req_duration: ['p(95)<500', 'p(99)<1000'],
     http_req_failed: ['rate<0.01'],
+    // Smoke assertion: fail the run if no response returns 200.
+    checks: ['rate>0'],
   },
 };
 
+// Shared config
 const BASE_URL = __ENV.API_URL || 'http://localhost:3000';
+const API_PREFIX = '/api/v1';
+
+// Track successful (200) responses so we can fail the run if all requests 404.
+const successCount = new Counter('login_success_200');
 
 export default function () {
   const payload = JSON.stringify({
@@ -27,7 +34,11 @@ export default function () {
     },
   };
 
-  const res = http.post(`${BASE_URL}/auth/login`, payload, params);
+  const res = http.post(`${BASE_URL}${API_PREFIX}/auth/login`, payload, params);
+
+  if (res.status === 200) {
+    successCount.add(1);
+  }
 
   check(res, {
     'status is 200 or 401': (r) => r.status === 200 || r.status === 401,
@@ -42,4 +53,22 @@ export default function () {
   });
 
   sleep(1);
+}
+
+export function handleSummary(data) {
+  // Smoke assertion: fail the run if no response returned 200 (e.g. all 404s
+  // caused by a wrong API path prefix).
+  const successMetric = data.metrics.login_success_200;
+  const successCountValue = successMetric ? successMetric.values.count : 0;
+
+  if (successCountValue === 0) {
+    console.error(
+      'SMOKE FAILURE: no responses returned 200. ' +
+        `Check that ${BASE_URL}${API_PREFIX}/auth/login is a valid route.`
+    );
+    // Non-zero exit code fails the k6 run.
+    throw new Error('Smoke assertion failed: no 200 responses received');
+  }
+
+  return {};
 }

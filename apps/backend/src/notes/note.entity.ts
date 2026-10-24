@@ -19,6 +19,17 @@ export class Note {
   @Column({ type: 'float', default: 0 })
   timestamp: number;
 
+  /** Generated tsvector column used for full-text search */
+  @Column({
+    type: 'tsvector',
+    generatedType: 'STORED',
+    asExpression: "to_tsvector('english', coalesce(content, ''))",
+    insert: false,
+    update: false,
+    select: false,
+  })
+  searchVector: string;
+
   @CreateDateColumn()
   createdAt: Date;
 

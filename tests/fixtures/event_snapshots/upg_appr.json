@@ -1,0 +1,13 @@
+{
+  "event": "upg_appr",
+  "symbol": "upg_appr",
+  "topics": [
+    "upg_appr",
+    1
+  ],
+  "data": {
+    "timelock_expiry_ledger": 1280000
+  },
+  "raw_bytes_footprint": 108,
+  "max_bytes_budget": 16384
+}

@@ -1,11 +1,15 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { CourseModule } from './course-module.entity';
+import { Lesson } from '../lessons/lesson.entity';
 
 @Injectable()
 export class ModulesService {
-  constructor(@InjectRepository(CourseModule) private repo: Repository<CourseModule>) {}
+  constructor(
+    @InjectRepository(CourseModule) private repo: Repository<CourseModule>,
+    private dataSource: DataSource,
+  ) {}
 
   private withLockStatus(mod: CourseModule): CourseModule & { isLocked: boolean } {
     const isLocked = mod.releaseDate != null && new Date(mod.releaseDate) > new Date();
@@ -83,7 +87,7 @@ export class ModulesService {
   async reorder(courseId: string, moduleOrder: string[]): Promise<CourseModule[]> {
     // Fetch all modules for this course
     const modules = await this.repo.find({ where: { courseId } });
-    
+
     // Validate all requested module IDs exist
     const moduleMap = new Map(modules.map((m) => [m.id, m]));
     for (const moduleId of moduleOrder) {
@@ -92,12 +96,36 @@ export class ModulesService {
       }
     }
 
-    // Reorder modules according to the provided array
-    for (let i = 0; i < moduleOrder.length; i++) {
-      const module = moduleMap.get(moduleOrder[i])!;
-      module.order = i + 1;
-      await this.repo.save(module);
-    }
+    // Reorder modules and recompute lesson globalOrder atomically
+    await this.dataSource.transaction(async (manager) => {
+      const moduleRepo = manager.getRepository(CourseModule);
+      const lessonRepo = manager.getRepository(Lesson);
+
+      // Reorder modules according to the provided array
+      for (let i = 0; i < moduleOrder.length; i++) {
+        const module = moduleMap.get(moduleOrder[i])!;
+        module.order = i + 1;
+        await moduleRepo.save(module);
+      }
+
+      // Recompute globalOrder for all lessons across modules in their new order
+      const orderedModules = await moduleRepo.find({
+        where: { courseId },
+        order: { order: 'ASC' },
+      });
+
+      let globalIndex = 0;
+      for (const mod of orderedModules) {
+        const lessons = await lessonRepo.find({
+          where: { moduleId: mod.id },
+          order: { order: 'ASC' },
+        });
+        for (const lesson of lessons) {
+          lesson.globalOrder = globalIndex++;
+          await lessonRepo.save(lesson);
+        }
+      }
+    });
 
     // Return updated modules in order
     return this.repo.find({

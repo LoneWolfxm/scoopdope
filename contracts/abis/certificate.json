@@ -28,9 +28,10 @@
       "outputs": [{ "type": "u64" }]
     },
     {
-      "name": "revoke",
-      "doc": "Revoke an issued certificate. Admin only.",
+      "name": "revoke_certificate",
+      "doc": "Revoke an issued certificate, marking it as invalid in persistent storage. Admin only; authorization is checked against the shared RBAC contract.",
       "inputs": [
+        { "name": "admin", "type": "address" },
         { "name": "certificate_id", "type": "u64" },
         { "name": "reason", "type": "string" }
       ],
@@ -51,6 +52,14 @@
         { "name": "owner", "type": "address" }
       ],
       "outputs": [{ "type": "Vec<u64>" }]
+    },
+    {
+      "name": "is_valid",
+      "doc": "Return true if the certificate exists and has not been revoked; returns false for revoked certificates.",
+      "inputs": [
+        { "name": "certificate_id", "type": "u64" }
+      ],
+      "outputs": [{ "type": "bool" }]
     },
     {
       "name": "is_revoked",
@@ -95,6 +104,11 @@
     },
     {
       "name": "revoke",
+      "topics": ["revoke", "certificate_id"],
+      "data": { "type": "RevocationRecord" }
+    },
+    {
+      "name": "revoke_certificate",
       "topics": ["revoke", "certificate_id"],
       "data": { "type": "RevocationRecord" }
     }

@@ -5,6 +5,7 @@ import { WINSTON_MODULE_PROVIDER } from 'nest-winston';
 import { ConfigService } from '@nestjs/config';
 import { HealthController } from '../health.controller';
 import { HealthService } from '../health.service';
+import { ServiceUnavailableException } from '@nestjs/common';
 import { DiskHealthIndicator } from '../indicators/disk.health';
 import { ElasticsearchHealthIndicator } from '../indicators/elasticsearch.health';
 import { StellarSorobanHealthIndicator } from '../indicators/stellar-soroban.health';
@@ -52,6 +53,25 @@ describe('HealthController', () => {
     }).compile();
 
     controller = module.get<HealthController>(HealthController);
+  });
+
+  describe('check', () => {
+    it('should delegate to the full health service check', async () => {
+      mockHealthService.checkFull.mockResolvedValue(okResult);
+
+      await expect(controller.check()).resolves.toEqual(okResult);
+      expect(mockHealthService.checkFull).toHaveBeenCalled();
+    });
+
+    it('should return service unavailable when a critical dependency is down', async () => {
+      mockHealthService.checkFull.mockResolvedValue({
+        status: 'error',
+        timestamp: new Date().toISOString(),
+        checks: { stellar: { status: 'down', message: 'Stellar Horizon is unreachable' } },
+      });
+
+      await expect(controller.check()).rejects.toBeInstanceOf(ServiceUnavailableException);
+    });
   });
 
   describe('checkLiveness', () => {
