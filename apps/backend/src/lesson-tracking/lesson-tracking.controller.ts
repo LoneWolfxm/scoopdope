@@ -23,6 +23,7 @@ import {
   StartStudySessionDto,
   EndStudySessionDto,
   HeartbeatStudySessionDto,
+  UpdateLessonProgressDto,
 } from './dto/study-session.dto';
 
 @ApiTags('lesson-tracking')
@@ -82,13 +83,90 @@ export class LessonTrackingController {
   @Post('sessions/heartbeat')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Send heartbeat to keep session alive' })
+  @ApiOperation({
+    summary: 'Send heartbeat to keep session alive',
+    description:
+      'Called by the frontend every 30 seconds while the browser tab is visible. ' +
+      'Sessions with no heartbeat for 90 seconds are automatically marked as ended.',
+  })
   @ApiBody({ type: HeartbeatStudySessionDto })
-  @ApiResponse({ status: 200, description: 'Heartbeat received' })
+  @ApiResponse({
+    status: 200,
+    description: 'Heartbeat received',
+    schema: {
+      example: {
+        id: 'uuid',
+        userId: 'uuid',
+        lessonId: 'uuid',
+        startedAt: '2024-01-01T00:00:00Z',
+        lastHeartbeatAt: '2024-01-01T00:05:30Z',
+        durationSeconds: 330,
+        status: 'active',
+      },
+    },
+  })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 404, description: 'Session not found' })
   async heartbeat(@Body() dto: HeartbeatStudySessionDto) {
     return this.service.heartbeat(dto.sessionId);
+  }
+
+  @Post('lessons/:lessonId/progress')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Update lesson progress with watch time' })
+  @ApiBody({ type: UpdateLessonProgressDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Lesson progress updated',
+    schema: {
+      example: {
+        lessonId: 'uuid',
+        userId: 'uuid',
+        watchedSeconds: 300,
+        furthestTimestamp: 300,
+        completed: false,
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Lesson not found' })
+  async updateLessonProgress(
+    @CurrentUser() user: any,
+    @Param('lessonId') lessonId: string,
+    @Body() dto: UpdateLessonProgressDto,
+  ) {
+    return this.service.updateLessonProgress(
+      user.id,
+      lessonId,
+      dto.watchedSeconds,
+      dto.furthestTimestamp,
+    );
+  }
+
+  @Get('lessons/:lessonId/progress')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get lesson progress including resume position' })
+  @ApiResponse({
+    status: 200,
+    description: 'Lesson progress',
+    schema: {
+      example: {
+        lessonId: 'uuid',
+        userId: 'uuid',
+        watchedSeconds: 300,
+        furthestTimestamp: 300,
+        completed: false,
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async getLessonProgress(
+    @CurrentUser() user: any,
+    @Param('lessonId') lessonId: string,
+  ) {
+    return this.service.getLessonProgress(user.id, lessonId);
   }
 
   @Get('lessons/:lessonId/stats')
@@ -103,6 +181,8 @@ export class LessonTrackingController {
         totalTimeSeconds: 12000,
         studentCount: 10,
         isDifficult: true,
+        averageWatchedSeconds: 900,
+        averageFurthestTimestamp: 900,
       },
     },
   })

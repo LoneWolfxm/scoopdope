@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Sanitize, Trim } from 'class-sanitizer';
 import { IsBoolean, IsOptional, IsString } from 'class-validator';
+import { RichHtmlSanitizer } from '../../common/sanitizers/rich-html.sanitizer';
 import { StripHtmlSanitizer } from '../../common/sanitizers/strip-html.sanitizer';
 
 export class CreatePostDto {
@@ -13,7 +14,7 @@ export class CreatePostDto {
   @ApiProperty({ description: 'Forum post content' })
   @IsString()
   @Trim()
-  @Sanitize(StripHtmlSanitizer)
+  @Sanitize(RichHtmlSanitizer)
   content: string;
 
   @ApiPropertyOptional({ description: 'Pin the post (instructors/admins only)', default: false })

@@ -1,0 +1,15 @@
+{
+  "event": "vote",
+  "symbol": "vote",
+  "topics": [
+    "vote",
+    1,
+    "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H"
+  ],
+  "data": {
+    "support": true,
+    "weight": 50000000000
+  },
+  "raw_bytes_footprint": 128,
+  "max_bytes_budget": 16384
+}

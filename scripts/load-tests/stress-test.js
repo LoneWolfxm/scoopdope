@@ -25,6 +25,20 @@ export const options = {
 };
 
 const BASE_URL = __ENV.API_URL || 'http://localhost:3000';
+const API_PREFIX = '/api/v1';
+
+// Smoke assertion: fail the test if no request ever returns 200 (e.g. wrong path -> all 404)
+let successCount = 0;
+
+export function handleSummary(data) {
+  const smokeOk = successCount > 0;
+  check(null, {
+    'smoke: at least one response returned 200': () => smokeOk,
+  });
+  return {
+    stdout: JSON.stringify(data, null, 2),
+  };
+}
 
 export default function () {
   group('Stress Test - API Endpoints', () => {
@@ -32,9 +46,10 @@ export default function () {
     const operations = [
       () => {
         // Read courses
-        const res = http.get(`${BASE_URL}/v1/courses`, {
+        const res = http.get(`${BASE_URL}${API_PREFIX}/courses`, {
           tags: { operation: 'read' },
         });
+        if (res.status === 200) successCount++;
         check(res, {
           'read status 200': (r) => r.status === 200,
         });
@@ -42,9 +57,10 @@ export default function () {
       () => {
         // Get course details
         const courseId = Math.floor(Math.random() * 100) + 1;
-        const res = http.get(`${BASE_URL}/v1/courses/${courseId}`, {
+        const res = http.get(`${BASE_URL}${API_PREFIX}/courses/${courseId}`, {
           tags: { operation: 'read' },
         });
+        if (res.status === 200) successCount++;
         check(res, {
           'read status 200 or 404': (r) => r.status === 200 || r.status === 404,
         });
@@ -54,6 +70,7 @@ export default function () {
         const res = http.get(`${BASE_URL}/health`, {
           tags: { operation: 'health' },
         });
+        if (res.status === 200) successCount++;
         check(res, {
           'health status 200': (r) => r.status === 200,
         });

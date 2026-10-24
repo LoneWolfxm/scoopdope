@@ -14,6 +14,7 @@ export const options = {
 };
 
 const BASE_URL = __ENV.API_URL || 'http://localhost:3000';
+const API_PREFIX = '/api/v1';
 
 // Sample Stellar public keys for testing
 const STELLAR_KEYS = [
@@ -22,9 +23,16 @@ const STELLAR_KEYS = [
   'GCZST3XVCDTUJ76ZAV2HA72KYQJWKH6HOCF7FCCQP5XJJG2HDPPTDL7',
 ];
 
+// Smoke assertion: track whether at least one response returned 200
+let sawSuccess = false;
+
 export default function () {
   const randomKey = STELLAR_KEYS[Math.floor(Math.random() * STELLAR_KEYS.length)];
-  const res = http.get(`${BASE_URL}/stellar/balance/${randomKey}`);
+  const res = http.get(`${BASE_URL}${API_PREFIX}/stellar/balance/${randomKey}`);
+
+  if (res.status === 200) {
+    sawSuccess = true;
+  }
 
   check(res, {
     'status is 200 or 404': (r) => r.status === 200 || r.status === 404,
@@ -40,4 +48,10 @@ export default function () {
   });
 
   sleep(1);
+}
+
+export function teardown() {
+  check(sawSuccess, {
+    'at least one response returned 200': (v) => v === true,
+  });
 }

@@ -62,10 +62,35 @@ export class AddSupportTickets1770000000000 implements MigrationInterface {
       CREATE INDEX IF NOT EXISTS idx_ticket_replies_ticket
         ON ticket_replies("ticketId")
     `);
+
+    await queryRunner.query(`
+      ALTER TABLE support_tickets
+        ADD COLUMN IF NOT EXISTS "assignedStaffId" UUID REFERENCES users(id) ON DELETE SET NULL
+    `);
+
+    await queryRunner.query(`
+      CREATE TABLE IF NOT EXISTS support_ticket_attachments (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        "ticketId" UUID NOT NULL REFERENCES support_tickets(id) ON DELETE CASCADE,
+        "uploaderId" UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        "s3Key" VARCHAR(1024) NOT NULL,
+        "fileName" VARCHAR(255) NOT NULL,
+        "contentType" VARCHAR(255) NOT NULL,
+        "sizeBytes" BIGINT NOT NULL,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    await queryRunner.query(`
+      CREATE INDEX IF NOT EXISTS idx_support_ticket_attachments_ticket
+        ON support_ticket_attachments("ticketId")
+    `);
   }
 
   async down(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`DROP TABLE IF EXISTS support_ticket_attachments`);
     await queryRunner.query(`DROP TABLE IF EXISTS ticket_replies`);
+    await queryRunner.query(`ALTER TABLE support_tickets DROP COLUMN IF EXISTS "assignedStaffId"`);
     await queryRunner.query(`DROP TABLE IF EXISTS support_tickets`);
     await queryRunner.query(`DROP TYPE IF EXISTS support_tickets_status_enum`);
   }

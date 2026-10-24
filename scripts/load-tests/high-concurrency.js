@@ -64,6 +64,24 @@ export const options = {
 };
 
 const BASE_URL = __ENV.API_URL || 'http://localhost:3000';
+const API_PREFIX = '/api/v1';
+
+// Smoke assertion: fail the run if no response ever returns 200 (e.g. wrong path -> all 404s)
+export function setup() {
+  const res = http.get(`${BASE_URL}${API_PREFIX}/courses?page=0&limit=1`, {
+    tags: { endpoint: 'smoke' },
+  });
+
+  check(res, {
+    'smoke: at least one response returns 200': (r) => r.status === 200,
+  });
+
+  if (res.status !== 200) {
+    throw new Error(
+      `Smoke check failed: expected 200 from ${BASE_URL}${API_PREFIX}/courses, got ${res.status}`
+    );
+  }
+}
 
 /**
  * Detect connection-exhaustion symptoms in a response.
@@ -171,8 +189,8 @@ export function poolValidationScenario() {
 export function highConcurrencyScenario() {
   group('High Concurrency - Read Heavy', () => {
     // Simulate read-heavy workload
-    const coursesRes = http.get(`${BASE_URL}/v1/courses?page=${Math.floor(Math.random() * 10)}&limit=20`, {
-      tags: { endpoint: 'courses', scenario: 'high_concurrency' },
+    const coursesRes = http.get(`${BASE_URL}${API_PREFIX}/courses?page=${Math.floor(Math.random() * 10)}&limit=20`, {
+      tags: { endpoint: 'courses' },
     });
 
     recordPoolMetrics(coursesRes, { scenario: 'high_concurrency' });
@@ -186,8 +204,8 @@ export function highConcurrencyScenario() {
 
     // Get random course details
     const courseId = Math.floor(Math.random() * 100) + 1;
-    const courseRes = http.get(`${BASE_URL}/v1/courses/${courseId}`, {
-      tags: { endpoint: 'course-details', scenario: 'high_concurrency' },
+    const courseRes = http.get(`${BASE_URL}${API_PREFIX}/courses/${courseId}`, {
+      tags: { endpoint: 'course-details' },
     });
 
     recordPoolMetrics(courseRes, { scenario: 'high_concurrency' });

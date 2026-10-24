@@ -186,6 +186,65 @@ stellar contract invoke \
 
 ---
 
+## Buyback Contract
+
+Executes token buyback operations and emits events for every state change so that external observers and the analytics backend can track buyback history.
+
+### Function Signatures
+
+| Function | Parameters | Returns | Auth |
+|----------|-----------|---------|------|
+| `schedule_buyback` | `admin: Address, amount: i128, execute_at_ledger: u32` | `u64` (buyback ID) | Admin |
+| `execute_buyback` | `buyback_id: u64` | — | Admin |
+| `cancel_buyback` | `admin: Address, buyback_id: u64` | — | Admin |
+| `get_buyback` | `buyback_id: u64` | `Option<BuybackRecord>` | None |
+
+### Event Schema
+
+| Topic 1 | Topic 2 | Data |
+|---------|---------|------|
+| `Symbol("buyback")` | `Symbol("scheduled")` | `(buyback_id: u64, amount: i128, execute_at_ledger: u32)` |
+| `Symbol("buyback")` | `Symbol("executed")` | `(buyback_id: u64, amount: i128, executed_at_ledger: u32)` |
+| `Symbol("buyback")` | `Symbol("cancelled")` | `(buyback_id: u64, amount: i128)` |
+
+> The backend's Stellar event listener subscribes to the `buyback` topic and stores each event in the analytics table.
+
+### CLI Examples
+
+```bash
+# Schedule a buyback of 500 BST (amount in stroops: 500 * 10^7)
+stellar contract invoke \
+  --id <BUYBACK_ID> \
+  --source admin \
+  --network testnet \
+  -- \
+  schedule_buyback \
+  --admin <ADMIN_ADDRESS> \
+  --amount 5000000000 \
+  --execute_at_ledger 600000
+
+# Execute a scheduled buyback
+stellar contract invoke \
+  --id <BUYBACK_ID> \
+  --source admin \
+  --network testnet \
+  -- \
+  execute_buyback \
+  --buyback_id 1
+
+# Cancel a scheduled buyback
+stellar contract invoke \
+  --id <BUYBACK_ID> \
+  --source admin \
+  --network testnet \
+  -- \
+  cancel_buyback \
+  --admin <ADMIN_ADDRESS> \
+  --buyback_id 1
+```
+
+---
+
 ## Governance Contract
 
 On-chain proposal and voting for platform parameter changes.
@@ -385,3 +444,24 @@ curl https://api.scoopdope.com/v1/credentials/verify/<TX_HASH>
 # Via Stellar CLI
 stellar tx fetch --hash <TX_HASH> --network testnet
 ```
+
+---
+
+## Branch Protection
+
+The contracts CI workflow (`.github/workflows/contracts.yml`) runs on every pull request targeting `main` or `develop`. It executes `cargo test`, `cargo fmt --check`, `cargo clippy`, `cargo audit`, and `cargo deny`, and caches Rust compilation artifacts so the job stays fast.
+
+### Required Status Check
+
+The **`Contracts - Test, Format, Lint, Audit, Deny`** check must pass before a PR can be merged into `main` or `develop`. A failing `cargo test` (or any other step in the workflow) blocks the merge.
+
+### Configuring the Required Check
+
+1. Go to the repository on GitHub and open **Settings → Branches**.
+2. Under **Branch protection rules**, edit the rule for `main` (and repeat for `develop`), or click **Add branch protection rule** if none exists.
+3. Enable **Require status checks to pass before merging**.
+4. In the status checks search box, select **`Contracts - Test, Format, Lint, Audit, Deny`**.
+5. Optionally enable **Require branches to be up to date before merging** so the check runs against the latest base branch.
+6. Save the rule.
+
+> The status check only appears in the list after the workflow has run at least once on a pull request. Open a PR (or re-run the workflow) if it is not yet selectable.

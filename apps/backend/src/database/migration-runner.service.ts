@@ -16,6 +16,10 @@ export interface MigrationResult {
   durationMs: number;
 }
 
+const MIGRATION_ADVISORY_LOCK_KEY = 1234;
+const LOCK_RETRY_INTERVAL_MS = 500;
+const LOCK_MAX_WAIT_MS = 60_000;
+
 @Injectable()
 export class MigrationRunnerService {
   private readonly logger = new Logger(MigrationRunnerService.name);
@@ -33,21 +37,52 @@ export class MigrationRunnerService {
       throw new Error('DataSource is not initialized');
     }
 
-    const executed = await this.dataSource.runMigrations();
-    const durationMs = Date.now() - start;
+    const acquired = await this.acquireAdvisoryLock();
 
-    this.logger.log(
-      `Ran ${executed.length} migration(s) in ${durationMs}ms`,
-    );
+    if (!acquired) {
+      // Another instance holds the lock and is running migrations. Wait for it
+      // to finish, then re-check whether migrations are already complete.
+      this.logger.log(
+        'Migration advisory lock held by another instance; waiting for completion...',
+      );
 
-    const allMigrations = await this.getStatus();
+      const completed = await this.waitForMigrationsComplete();
 
-    return {
-      success: executed.length > 0,
-      migrations: allMigrations,
-      executed: executed.map((m) => m.name),
-      durationMs,
-    };
+      if (!completed) {
+        this.logger.warn(
+          'Timed out waiting for concurrent migrations to complete; skipping migration run',
+        );
+      }
+
+      const allMigrations = await this.getStatus();
+
+      return {
+        success: false,
+        migrations: allMigrations,
+        executed: [],
+        durationMs: Date.now() - start,
+      };
+    }
+
+    try {
+      const executed = await this.dataSource.runMigrations();
+      const durationMs = Date.now() - start;
+
+      this.logger.log(
+        `Ran ${executed.length} migration(s) in ${durationMs}ms`,
+      );
+
+      const allMigrations = await this.getStatus();
+
+      return {
+        success: executed.length > 0,
+        migrations: allMigrations,
+        executed: executed.map((m) => m.name),
+        durationMs,
+      };
+    } finally {
+      await this.releaseAdvisoryLock();
+    }
   }
 
   async revert(): Promise<MigrationResult> {
@@ -58,27 +93,84 @@ export class MigrationRunnerService {
       throw new Error('DataSource is not initialized');
     }
 
-    const before = await this.getStatus();
-    const executedBefore = before.filter((m) => m.executedAt).length;
+    const acquired = await this.acquireAdvisoryLock();
 
-    await this.dataSource.undoLastMigration();
+    if (!acquired) {
+      throw new Error(
+        'Could not acquire migration advisory lock; another migration is in progress',
+      );
+    }
 
-    const after = await this.getStatus();
-    const executedAfter = after.filter((m) => m.executedAt).length;
-    const durationMs = Date.now() - start;
+    try {
+      const before = await this.getStatus();
+      const executedBefore = before.filter((m) => m.executedAt).length;
 
-    const revertedCount = executedBefore - executedAfter;
+      await this.dataSource.undoLastMigration();
 
-    this.logger.log(
-      `Reverted ${revertedCount} migration(s) in ${durationMs}ms`,
+      const after = await this.getStatus();
+      const executedAfter = after.filter((m) => m.executedAt).length;
+      const durationMs = Date.now() - start;
+
+      const revertedCount = executedBefore - executedAfter;
+
+      this.logger.log(
+        `Reverted ${revertedCount} migration(s) in ${durationMs}ms`,
+      );
+
+      return {
+        success: revertedCount > 0,
+        migrations: after,
+        executed: [],
+        durationMs,
+      };
+    } finally {
+      await this.releaseAdvisoryLock();
+    }
+  }
+
+  private async acquireAdvisoryLock(): Promise<boolean> {
+    const result = await this.dataSource.query(
+      'SELECT pg_try_advisory_lock($1) AS acquired',
+      [MIGRATION_ADVISORY_LOCK_KEY],
     );
 
-    return {
-      success: revertedCount > 0,
-      migrations: after,
-      executed: [],
-      durationMs,
-    };
+    return Boolean(result?.[0]?.acquired);
+  }
+
+  private async releaseAdvisoryLock(): Promise<void> {
+    try {
+      await this.dataSource.query('SELECT pg_advisory_unlock($1)', [
+        MIGRATION_ADVISORY_LOCK_KEY,
+      ]);
+    } catch (error) {
+      this.logger.error(
+        `Failed to release migration advisory lock: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  private async waitForMigrationsComplete(): Promise<boolean> {
+    const deadline = Date.now() + LOCK_MAX_WAIT_MS;
+
+    while (Date.now() < deadline) {
+      await this.sleep(LOCK_RETRY_INTERVAL_MS);
+
+      const acquired = await this.acquireAdvisoryLock();
+
+      if (acquired) {
+        // Lock-holder finished; release immediately and report completion.
+        await this.releaseAdvisoryLock();
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   async getStatus(): Promise<MigrationStatus[]> {

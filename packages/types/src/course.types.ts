@@ -6,6 +6,9 @@
 /** Possible course difficulty levels */
 export type CourseLevel = 'beginner' | 'intermediate' | 'advanced';
 
+/** Supported course languages (ISO 639-1 codes) */
+export type CourseLanguage = 'en' | 'fr' | 'ar' | 'es';
+
 /** Lifecycle status of a course */
 export type CourseStatus = 'draft' | 'scheduled' | 'published';
 
@@ -17,6 +20,7 @@ export interface CourseSummary {
   title: string;
   description: string;
   level: CourseLevel;
+  language: CourseLanguage;
   durationHours: number;
   status: CourseStatus;
   instructorId: string | null;
@@ -34,6 +38,7 @@ export interface CreateCourseDto {
   /** Min 10 characters, HTML stripped */
   description: string;
   level?: CourseLevel;
+  language?: CourseLanguage;
   durationHours?: number;
   requiresKyc?: boolean;
 }
@@ -56,6 +61,7 @@ export interface UpdateCourseDto {
 export interface CourseQueryDto {
   search?: string;
   level?: CourseLevel;
+  language?: CourseLanguage;
   status?: CourseStatus;
   instructorId?: string;
   page?: number;

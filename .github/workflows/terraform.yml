@@ -150,6 +150,53 @@ jobs:
               body: output
             });
 
-      - name: Terraform Apply
+      - name: Terraform Apply (Staging)
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        run: terraform apply -auto-approve
+        run: terraform apply -auto-approve -var-file=staging.tfvars
+
+      - name: Trigger and verify secret rotation in staging
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        id: staging-rotation
+        run: |
+          set -euo pipefail
+          SECRETS=("scoopdope/staging/jwt-secret" "scoopdope/staging/database-password" "scoopdope/staging/payment-webhook-secret")
+          for SECRET_ID in "${SECRETS[@]}"; do
+            echo "Triggering rotation for ${SECRET_ID}"
+            aws secretsmanager rotate-secret \
+              --secret-id "${SECRET_ID}" \
+              --rotation-lambda-arn "$(aws secretsmanager describe-secret --secret-id "${SECRET_ID}" --query 'RotationLambdaARN' --output text)"
+
+            echo "Waiting for rotation of ${SECRET_ID} to complete"
+            for attempt in $(seq 1 30); do
+              STATUS=$(aws secretsmanager describe-secret --secret-id "${SECRET_ID}" --query 'LastRotationDate' --output text)
+              if [ "${STATUS}" != "None" ]; then
+                echo "${SECRET_ID} rotated successfully"
+                break
+              fi
+              if [ "${attempt}" -eq 30 ]; then
+                echo "Timed out waiting for rotation of ${SECRET_ID}" >&2
+                exit 1
+              fi
+              sleep 10
+            done
+          done
+
+      - name: Verify staging application health after rotation
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            if curl -fsS https://staging.scoopdope.com/health > /dev/null; then
+              echo "Staging application healthy after secret rotation"
+              exit 0
+            fi
+            if [ "${attempt}" -eq 12 ]; then
+              echo "Staging application unhealthy after secret rotation" >&2
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Terraform Apply (Production)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push' && steps.staging-rotation.outcome == 'success'
+        run: terraform apply -auto-approve -var-file=production.tfvars

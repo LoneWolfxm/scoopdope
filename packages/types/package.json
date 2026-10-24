@@ -1,7 +1,8 @@
 {
   "name": "@scoopdope/types",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Shared TypeScript types, DTOs and interfaces for scoopdope frontend and backend",
+  "private": true,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -19,7 +20,8 @@
   },
   "files": [
     "dist",
-    "src"
+    "src",
+    "CHANGELOG.md"
   ],
   "devDependencies": {
     "typescript": "^5.4.0"

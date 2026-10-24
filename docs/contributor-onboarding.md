@@ -475,7 +475,62 @@ export default function CoursesPage() {
 
 Protected routes wrap content with `<ProtectedRoute>` from `src/components/ProtectedRoute.tsx`. Auth state comes from the Zustand `auth.store.ts` and `src/lib/auth-context.tsx`.
 
-### 5e. Writing a test
+### 5e. Updating the shared types package (`packages/types`)
+
+The `packages/types/` package holds TypeScript types shared by both the frontend and backend. It is versioned independently with semantic versioning and has its own `CHANGELOG.md`. Because both apps consume it, a type change can break compilation in either app — so follow this workflow.
+
+#### When to bump which version
+
+| Change | Version bump | Example |
+|---|---|---|
+| Removing or renaming an exported type/field, changing a field's type, making an optional field required | **major** | `Course.category: string` → `Course.category: CourseCategory` |
+| Adding a new exported type, adding an optional field, adding a new enum member | **minor** | Adding `Course.tags?: string[]` |
+| Documentation, comments, or non-behavioural type-only fixes | **patch** | Fixing a JSDoc typo |
+
+#### Adding a CHANGELOG entry
+
+Add an entry to `packages/types/CHANGELOG.md` under an `## [Unreleased]` heading (or the next version heading) describing the change:
+
+```markdown
+## [Unreleased]
+
+### Added
+- `Course.tags?: string[]` optional field
+
+### Changed
+- `Course.category` is now the `CourseCategory` union type (breaking)
+```
+
+Use the standard sections: `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`.
+
+#### How release-please creates the version bump PR
+
+`release-please` is configured to track `packages/types` as its own package. When you merge commits that touch `packages/types/`, release-please opens (or updates) a PR titled `chore(types): release <version>`. That PR bumps the version in `packages/types/package.json` and moves the `[Unreleased]` changelog entries under the new version heading. Review and merge it like any other PR — do not hand-edit the version number.
+
+#### Adding type guards and migration helpers for breaking changes
+
+Any **major** (breaking) change must ship with migration helpers so consumers can adapt. Add type guards to `packages/types/src/guards.ts` and migration helpers to `packages/types/src/migrations.ts`:
+
+```typescript
+// guards.ts — narrow unknown data to the new shape
+export function isCourseCategory(value: unknown): value is CourseCategory {
+  return typeof value === 'string' && COURSE_CATEGORIES.includes(value as CourseCategory);
+}
+
+// migrations.ts — convert old shapes to the new shape
+export function migrateCourseCategory(raw: string): CourseCategory {
+  return isCourseCategory(raw) ? raw : 'general';
+}
+```
+
+Document the migration path in the CHANGELOG entry so consumers know which helper to call.
+
+#### CI enforces a version bump
+
+CI runs a check that fails if `packages/types/` has uncommitted or changed files without a corresponding version bump (i.e. a change to `packages/types/package.json`'s `version` or a new CHANGELOG entry). If your PR touches `packages/types/` and CI fails with a "missing version bump" error, add the appropriate semver bump and CHANGELOG entry as described above.
+
+### 5f. Writing a test
+=======
 
 **Unit test** (backend) — mock dependencies with Jest:
 

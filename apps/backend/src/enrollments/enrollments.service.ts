@@ -1,9 +1,22 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Enrollment } from './entities/enrollment.entity';
 import { Notification } from '../notifications/entities/notification.entity';
 import { CreateEnrollmentDto } from './dto/create-enrollment.dto';
+import { CourseStatus } from '../courses/entities/course.entity';
+import { CoursesService } from '../courses/courses.service';
+import { CourseVersioningService } from '../courses/course-versioning.service';
+import { PrerequisitesService } from '../learning-paths/prerequisites.service';
+import { MetricsService } from '../metrics/metrics.service';
+import { EnrollmentConfirmedEvent } from './events/enrollment-confirmed.event';
 
 /** TTL for cached enrollment counts, in milliseconds. */
 const ENROLLMENT_COUNT_TTL_MS = 60_000;
@@ -24,6 +37,11 @@ export class EnrollmentsService {
     private readonly enrollmentRepository: Repository<Enrollment>,
     @InjectRepository(Notification)
     private readonly notificationRepository: Repository<Notification>,
+    private readonly coursesService: CoursesService,
+    private readonly versioningService: CourseVersioningService,
+    private readonly prereqService: PrerequisitesService,
+    private readonly eventEmitter: EventEmitter2,
+    private readonly metrics: MetricsService,
   ) {}
 
   async enroll(userId: string, courseId: string, adminOverride = false): Promise<Enrollment> {
@@ -55,19 +73,7 @@ export class EnrollmentsService {
       }),
     );
 
-  async findByCourse(courseId: string): Promise<Enrollment[]> {
-    return this.enrollmentRepository.find({ where: { courseId } });
-  }
-
-  async notifyAllEnrolled(courseId: string, message: string): Promise<void> {
-    const enrollments = await this.enrollmentRepository.find({
-      where: { courseId },
-      select: ['studentId'],
-    });
-
-    if (enrollments.length === 0) {
-      return;
-    }
+    const transactionHash = enrollment.transactionHash ?? null;
 
     // Invalidate the cached count so the new enrollment is reflected immediately.
     this.enrollmentCountCache.delete(courseId);
@@ -97,19 +103,44 @@ export class EnrollmentsService {
     return enrollment;
   }
 
+  async findByCourse(courseId: string): Promise<Enrollment[]> {
+    return this.enrollmentRepository.find({ where: { courseId } });
+  }
+
+  async notifyAllEnrolled(courseId: string, message: string): Promise<void> {
+    const enrollments = await this.enrollmentRepository.find({
+      where: { courseId },
+      select: ['studentId'],
+    });
+
+    if (enrollments.length === 0) {
+      return;
+    }
+
+    const notifications = enrollments.map((enrollment) =>
+      this.notificationRepository.create({
+        userId: enrollment.studentId,
+        courseId,
+        message,
+      }),
+    );
+
+    await this.notificationRepository.save(notifications);
+  }
+
   /**
    * Count total enrollments for a course.
    *
    * Results are cached for a short TTL so repeated calls within the window
    * do not hit the database.
    */
-  async countByCoursId(courseId: string): Promise<number> {
+  async countByCourseId(courseId: string): Promise<number> {
     const cached = this.enrollmentCountCache.get(courseId);
     if (cached && cached.expiresAt > Date.now()) {
       return cached.value;
     }
 
-    const value = await this.repo.count({ where: { courseId } });
+    const value = await this.enrollmentRepository.count({ where: { courseId } });
     this.enrollmentCountCache.set(courseId, {
       value,
       expiresAt: Date.now() + ENROLLMENT_COUNT_TTL_MS,
@@ -121,17 +152,39 @@ export class EnrollmentsService {
    * Count completed enrollments for a course
    */
   async countCompletedByCourseId(courseId: string): Promise<number> {
-    return this.repo
+    return this.enrollmentRepository
       .createQueryBuilder('enrollment')
       .where('enrollment.courseId = :courseId', { courseId })
       .andWhere('enrollment.completedAt IS NOT NULL')
       .getCount();
   }
 
+  /**
+   * Return the difficulty levels of all courses a learner has completed.
+   *
+   * Used by the recommendation engine to assess the learner's current level.
+   * Only enrollments with a non-null `completedAt` are considered, and the
+   * joined course's `difficultyLevel` is selected.
+   */
+  async getCompletedCourseLevels(userId: string): Promise<CourseLevel[]> {
+    const rows = await this.repo
+      .createQueryBuilder('enrollment')
+      .innerJoin('enrollment.course', 'course')
+      .select('course.difficultyLevel', 'difficultyLevel')
+      .where('enrollment.userId = :userId', { userId })
+      .andWhere('enrollment.completedAt IS NOT NULL')
+      .andWhere('course.difficultyLevel IS NOT NULL')
+      .getRawMany<{ difficultyLevel: CourseLevel }>();
+
+    return rows.map((row) => row.difficultyLevel);
+  }
+
   async unenroll(userId: string, courseId: string): Promise<void> {
-    const enrollment = await this.repo.findOne({ where: { userId, courseId } });
+    const enrollment = await this.enrollmentRepository.findOne({
+      where: { userId, courseId },
+    });
     if (!enrollment) throw new NotFoundException('Enrollment not found');
-    await this.repo.remove(enrollment);
+    await this.enrollmentRepository.remove(enrollment);
 
     // Invalidate the cached count so the removal is reflected immediately.
     this.enrollmentCountCache.delete(courseId);
@@ -141,7 +194,7 @@ export class EnrollmentsService {
   }
 
   findByUser(userId: string): Promise<Enrollment[]> {
-    return this.repo.find({
+    return this.enrollmentRepository.find({
       where: { userId },
       relations: ['course'],
       order: { enrolledAt: 'DESC' },

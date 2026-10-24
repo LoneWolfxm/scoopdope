@@ -24,7 +24,7 @@ export class HealthController {
    * GET /health
    *
    * Primary health check endpoint for load balancers and monitoring systems.
-   * Tests database and Redis connectivity.
+    * Tests database, Redis, and Stellar Horizon connectivity.
    * - Returns 200 with status:"ok" when all critical services are healthy.
    * - Returns 503 with status:"error" when any critical dependency is down.
    * - Does NOT require authentication.
@@ -33,8 +33,8 @@ export class HealthController {
   @ApiOperation({
     summary: 'Health check',
     description:
-      'Returns health status of the application. Checks database and Redis connectivity. ' +
-      'Returns 200 when all services are healthy, 503 when any critical dependency is down. ' +
+      'Returns health status of the application. Checks database, Redis, and Stellar Horizon connectivity. ' +
+      'Returns 200 when all critical services are healthy, 503 when any critical dependency is down. ' +
       'No authentication required.',
   })
   @ApiResponse({
@@ -47,6 +47,7 @@ export class HealthController {
         checks: {
           database: { status: 'up' },
           redis: { status: 'up' },
+          stellar: { status: 'up' },
           memory_heap: { status: 'up' },
           memory_rss: { status: 'up' },
         },

@@ -19,6 +19,7 @@ import { CurrentUser } from '../auth/current-user.decorator';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody, ApiResponse } from '@nestjs/swagger';
 import { RubricScore } from './peer-review.entity';
 import { User } from '../users/user.entity';
+import { MAX_ASSIGNMENT_UPLOAD_BYTES, validateAssignmentUpload } from './assignment-upload.validation';
 
 interface CreateAssignmentPayload {
   title: string;
@@ -84,12 +85,14 @@ export class AssignmentsController {
       },
     },
   })
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_ASSIGNMENT_UPLOAD_BYTES } }))
   @ApiOperation({ summary: 'Submit an assignment' })
   @ApiResponse({ status: 400, description: 'Bad request' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden' })
   @ApiResponse({ status: 404, description: 'Not found' })
+  @ApiResponse({ status: 413, description: 'Uploaded file exceeds the 20 MB limit' })
+  @ApiResponse({ status: 422, description: 'File type or file content is not allowed' })
   @ApiResponse({ status: 429, description: 'Too many requests' })
   @ApiResponse({ status: 500, description: 'Internal server error' })
   async submitAssignment(
@@ -97,6 +100,7 @@ export class AssignmentsController {
     @Param('id') id: string,
     @UploadedFile() file: Express.Multer.File,
   ) {
+    validateAssignmentUpload(file);
     // In a real app, you would upload the file to S3/CDN here.
     // For this implementation, we'll simulate it by using the filename or a mock URL.
     const fileUrl = `https://cdn.scoopdope.com/submissions/${user.id}/${file.originalname}`;

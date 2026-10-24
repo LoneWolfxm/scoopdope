@@ -28,7 +28,11 @@ export const options = {
 };
 
 const BASE_URL = __ENV.API_URL || 'http://localhost:3000';
-const THINK_TIME = 2; // seconds between actions
+const API_PREFIX = '/api/v1';
+const THINK_TIME = 2; // seconds between actions;
+
+// Smoke check: track whether any request in this VU iteration returned 200
+let sawSuccess = false;
 
 // Generate unique user for each VU
 const userId = `user_${__VU}_${Date.now()}`;
@@ -43,7 +47,7 @@ export default function () {
         username: userId,
       });
 
-      const registerRes = http.post(`${BASE_URL}/v1/auth/register`, registerPayload, {
+      const registerRes = http.post(`${BASE_URL}${API_PREFIX}/auth/register`, registerPayload, {
         headers: { 'Content-Type': 'application/json' },
         tags: { api: 'yes' },
       });
@@ -52,6 +56,8 @@ export default function () {
         'register status 201': (r) => r.status === 201,
         'register response time < 500ms': (r) => r.timings.duration < 500,
       });
+
+      if (registerRes.status === 200) sawSuccess = true;
 
       sleep(THINK_TIME);
     });
@@ -64,7 +70,7 @@ export default function () {
         password: 'Test@1234!',
       });
 
-      const loginRes = http.post(`${BASE_URL}/v1/auth/login`, loginPayload, {
+      const loginRes = http.post(`${BASE_URL}${API_PREFIX}/auth/login`, loginPayload, {
         headers: { 'Content-Type': 'application/json' },
         tags: { api: 'yes' },
       });
@@ -79,12 +85,14 @@ export default function () {
         },
       });
 
+      if (loginRes.status === 200) sawSuccess = true;
+
       sleep(THINK_TIME);
     });
 
     // 3. Browse courses
     group('3. Browse Courses', () => {
-      const coursesRes = http.get(`${BASE_URL}/v1/courses?page=1&limit=10`, {
+      const coursesRes = http.get(`${BASE_URL}${API_PREFIX}/courses?page=1&limit=10`, {
         headers: { Authorization: `Bearer ${accessToken}` },
         tags: { api: 'yes' },
       });
@@ -98,12 +106,14 @@ export default function () {
         },
       });
 
+      if (coursesRes.status === 200) sawSuccess = true;
+
       sleep(THINK_TIME);
     });
 
     // 4. Get course details
     group('4. View Course Details', () => {
-      const courseRes = http.get(`${BASE_URL}/v1/courses/1`, {
+      const courseRes = http.get(`${BASE_URL}${API_PREFIX}/courses/1`, {
         headers: { Authorization: `Bearer ${accessToken}` },
         tags: { api: 'yes' },
       });
@@ -113,12 +123,14 @@ export default function () {
         'course response time < 500ms': (r) => r.timings.duration < 500,
       });
 
+      if (courseRes.status === 200) sawSuccess = true;
+
       sleep(THINK_TIME);
     });
 
     // 5. Enroll in course
     group('5. Enroll in Course', () => {
-      const enrollRes = http.post(`${BASE_URL}/v1/courses/1/enroll`, {}, {
+      const enrollRes = http.post(`${BASE_URL}${API_PREFIX}/courses/1/enroll`, {}, {
         headers: { Authorization: `Bearer ${accessToken}` },
         tags: { api: 'yes' },
       });
@@ -128,12 +140,14 @@ export default function () {
         'enroll response time < 500ms': (r) => r.timings.duration < 500,
       });
 
+      if (enrollRes.status === 200) sawSuccess = true;
+
       sleep(THINK_TIME);
     });
 
     // 6. Get user profile
     group('6. View User Profile', () => {
-      const profileRes = http.get(`${BASE_URL}/v1/users/${__VU}`, {
+      const profileRes = http.get(`${BASE_URL}${API_PREFIX}/users/${__VU}`, {
         headers: { Authorization: `Bearer ${accessToken}` },
         tags: { api: 'yes' },
       });
@@ -143,13 +157,15 @@ export default function () {
         'profile response time < 500ms': (r) => r.timings.duration < 500,
       });
 
+      if (profileRes.status === 200) sawSuccess = true;
+
       sleep(THINK_TIME);
     });
 
     // 7. Get Stellar balance
     group('7. Check Stellar Balance', () => {
       const balanceRes = http.get(
-        `${BASE_URL}/v1/stellar/balance/GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJJBBX7UYXNMWX5YSXF3YFQHF`,
+        `${BASE_URL}${API_PREFIX}/stellar/balance/GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJJBBX7UYXNMWX5YSXF3YFQHF`,
         {
           headers: { Authorization: `Bearer ${accessToken}` },
           tags: { api: 'yes' },
@@ -161,7 +177,15 @@ export default function () {
         'balance response time < 1000ms': (r) => r.timings.duration < 1000,
       });
 
+      if (balanceRes.status === 200) sawSuccess = true;
+
       sleep(THINK_TIME);
     });
+
+    // Smoke assertion: fail if no request in this journey returned 200
+    check(null, {
+      'at least one response returned 200': () => sawSuccess,
+    });
+    sawSuccess = false;
   });
 }

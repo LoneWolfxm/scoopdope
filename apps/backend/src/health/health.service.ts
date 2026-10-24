@@ -9,6 +9,7 @@ import { Cache } from 'cache-manager';
 import { WINSTON_MODULE_PROVIDER } from 'nest-winston';
 import { Logger } from 'winston';
 import { HealthCheckService, TypeOrmHealthIndicator, MemoryHealthIndicator } from '@nestjs/terminus';
+import { StellarHealthIndicator } from './indicators/stellar.health';
 import { Gauge } from 'prom-client';
 import {
   HEALTH_CACHE_TTL_MS,
@@ -23,6 +24,7 @@ export class HealthService implements OnModuleInit {
   private readonly appVersion: string;
   private readonly nodeEnv: string;
   private readonly environmentName: string;
+  private readonly stellarCritical: boolean;
   private isShuttingDown = false;
 
   private readonly healthGauge: Gauge<string>;
@@ -31,6 +33,7 @@ export class HealthService implements OnModuleInit {
     private readonly health: HealthCheckService,
     private readonly db: TypeOrmHealthIndicator,
     private readonly memory: MemoryHealthIndicator,
+    private readonly stellar: StellarHealthIndicator,
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
     @Inject(WINSTON_MODULE_PROVIDER) private readonly logger: Logger,
     private readonly configService: ConfigService,
@@ -38,6 +41,7 @@ export class HealthService implements OnModuleInit {
     this.appVersion = process.env.npm_package_version || '1.0.0';
     this.nodeEnv = this.configService.get<string>('nodeEnv') || 'development';
     this.environmentName = process.env.ENVIRONMENT_NAME || this.nodeEnv;
+    this.stellarCritical = this.configService.get<boolean>('health.stellarCritical') ?? true;
 
     this.healthGauge = new Gauge({
       name: 'health_check_status',
@@ -177,6 +181,22 @@ export class HealthService implements OnModuleInit {
         result.status = 'error';
       }
     });
+
+    let stellarResult: ProbeCheckResult;
+    try {
+      const stellarCheck = await this.stellar.check('stellar');
+      const details = stellarCheck['stellar'];
+      stellarResult = {
+        status: 'up',
+        latencyMs: typeof details?.latencyMs === 'number' ? details.latencyMs : undefined,
+      };
+    } catch {
+      stellarResult = { status: 'down', message: 'Stellar Horizon is unreachable' };
+    }
+    result.checks['stellar'] = stellarResult;
+    if (stellarResult.status === 'down' && this.stellarCritical) {
+      result.status = 'error';
+    }
 
     await this.withCache('full-memory-heap', async () => {
       try {

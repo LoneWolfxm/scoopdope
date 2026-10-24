@@ -24,13 +24,13 @@ export class KycController {
 
   @Put('customer')
   @ApiOperation({ summary: 'SEP-0012: submit or update KYC fields' })
+  @ApiResponse({ status: 200, description: 'KYC submission accepted' })
   @ApiResponse({ status: 400, description: 'Bad request' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden' })
   @ApiResponse({ status: 404, description: 'Not found' })
   @ApiResponse({ status: 429, description: 'Too many requests' })
   @ApiResponse({ status: 500, description: 'Internal server error' })
-  @ApiResponse({ status: 200, description: 'KYC submission accepted' })
   upsertCustomer(@Body() body: { stellarPublicKey: string; [key: string]: string }) {
     const { stellarPublicKey, ...fields } = body;
     return this.kycService.upsertCustomer(stellarPublicKey, fields);
@@ -47,6 +47,7 @@ export class KycController {
   @ApiResponse({ status: 429, description: 'Too many requests' })
   @ApiResponse({ status: 500, description: 'Internal server error' })
   @ApiResponse({ status: 201, description: 'Documents submitted, KYC status set to pending' })
+  @ApiResponse({ status: 200, description: 'Documents submitted, KYC status set to pending' })
   submitDocuments(@Body() dto: SubmitKycDocumentsDto) {
     return this.kycService.submitDocuments(dto);
   }
@@ -60,6 +61,7 @@ export class KycController {
   @ApiResponse({ status: 404, description: 'Not found' })
   @ApiResponse({ status: 429, description: 'Too many requests' })
   @ApiResponse({ status: 500, description: 'Internal server error' })
+  @ApiResponse({ status: 200, description: 'Webhook processed' })
   async webhook(@Body() payload: any) {
     await this.kycService.handleWebhook(payload);
     return { received: true };

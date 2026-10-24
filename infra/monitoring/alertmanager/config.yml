@@ -15,6 +15,10 @@ route:
     - receiver: 'info'
       match:
         severity: info
+    - receiver: 'monitoring'
+      match:
+        alertname: SecretsManagerRotation
+      repeat_interval: 1h
 
 receivers:
   - name: 'default'
@@ -50,6 +54,21 @@ receivers:
 
   - name: 'info'
     slack_configs: []
+
+  - name: 'monitoring'
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/PLACEHOLDER'
+        channel: '#monitoring'
+        send_resolved: true
+        title: '🔑 Secret Rotation: {{ .GroupLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+            *Alert:* {{ .Annotations.summary }}
+            *Description:* {{ .Annotations.description }}
+            *Secret:* {{ .Labels.secret_id }}
+            *Status:* {{ .Labels.status }}
+            *Time:* {{ .StartsAt }}
+          {{ end }}
 
 inhibit_rules:
   - source_match:

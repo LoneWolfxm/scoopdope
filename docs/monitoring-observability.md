@@ -35,7 +35,7 @@ docker compose up -d backend postgres redis
 | Grafana | http://localhost:3002 | admin / admin |
 | Prometheus | http://localhost:9090 | — |
 | Metrics endpoint | http://localhost:3000/metrics | — |
-| Health endpoint | http://localhost:3000/v1/health | — |
+| Health endpoint | http://localhost:3000/health | — |
 
 ---
 
@@ -54,7 +54,8 @@ docker compose up -d backend postgres redis
 | `http_requests_total` | Counter | `method`, `route`, `status_code` | Total HTTP requests handled. Incremented automatically by `MetricsInterceptor` on every response. |
 | `credential_issued_total` | Counter | `credential_type` | On-chain credentials issued via Stellar. Call `MetricsService.incrementCredentialIssued(type)` when issuing. |
 | `bst_minted_total` | Counter | `user_id` | BST reward tokens minted. Call `MetricsService.incrementBstMinted(userId)` when minting. |
-| `stellar_rpc_latency_seconds` | Histogram | `method`, `status` | Stellar RPC call duration. Buckets: 0.1s, 0.5s, 1s, 2s, 5s. Call `MetricsService.observeStellarRpcLatency(method, status, seconds)`. |
+| `stellar_rpc_latency_seconds` | Histogram | `method`, `status` | Duration of every Soroban contract invocation, including retries. Status is `success`, `error`, or `timeout`. Buckets: 0.1s, 0.5s, 1s, 2s, 5s, 10s, 30s. |
+| `stellar_rpc_timeouts_total` | Counter | `method` | Total timed-out Soroban contract invocations. |
 
 #### Default Node.js / process metrics (auto-collected by prom-client)
 
@@ -77,8 +78,17 @@ rate(http_requests_total{status_code=~"5.."}[5m])
 # Request rate by route
 sum by (route) (rate(http_requests_total[1m]))
 
-# 95th percentile Stellar RPC latency
-histogram_quantile(0.95, rate(stellar_rpc_latency_seconds_bucket[5m]))
+# Stellar RPC p50 / p95 / p99 latency by contract method
+histogram_quantile(0.50, sum by (le, method) (rate(stellar_rpc_latency_seconds_bucket[5m])))
+histogram_quantile(0.95, sum by (le, method) (rate(stellar_rpc_latency_seconds_bucket[5m])))
+histogram_quantile(0.99, sum by (le, method) (rate(stellar_rpc_latency_seconds_bucket[5m])))
+
+# Stellar RPC error and timeout rate (%)
+100 * sum(rate(stellar_rpc_latency_seconds_count{status=~"error|timeout"}[5m]))
+  / clamp_min(sum(rate(stellar_rpc_latency_seconds_count[5m])), 1e-9)
+
+# Stellar RPC timeouts in the last 5 minutes
+sum(increase(stellar_rpc_timeouts_total[5m]))
 
 # Credentials issued per minute
 rate(credential_issued_total[1m])
@@ -181,6 +191,9 @@ The pre-built dashboard (`nestjs-metrics.json`) includes:
 | Credential Issuance | `rate(credential_issued_total[5m])` | Credentials issued per second |
 | BST Minted | `rate(bst_minted_total[5m])` | Tokens minted per second |
 | Stellar RPC p95 | `histogram_quantile(0.95, rate(stellar_rpc_latency_seconds_bucket[5m]))` | 95th percentile RPC latency |
+| Stellar RPC p50/p95/p99 | Quantiles from `stellar_rpc_latency_seconds_bucket`, grouped by `method` | Contract invocation latency by percentile |
+| Stellar RPC Error Rate | `status=~"error|timeout"` divided by all RPC calls | Percentage of failed or timed-out invocations |
+| Stellar RPC Timeouts | `sum(increase(stellar_rpc_timeouts_total[5m]))` | Timed-out calls in the last 5 minutes |
 | Heap Memory | `nodejs_heap_size_used_bytes / 1024 / 1024` | Heap usage in MB |
 | Event Loop Lag | `nodejs_eventloop_lag_seconds` | Event loop latency |
 
@@ -292,7 +305,7 @@ Logs are automatically collected by your cluster's logging agent (Fluentd, Fluen
 
 ## Health Checks
 
-`GET /v1/health` runs five checks and returns `200 OK` when all pass, or `503 Service Unavailable` when any fail.
+`GET /health` checks PostgreSQL, Redis, memory, and Stellar Horizon. It returns `200 OK` when critical checks pass, or `503 Service Unavailable` when a critical check fails.
 
 | Check | Threshold | What it tests |
 |---|---|---|
@@ -300,21 +313,26 @@ Logs are automatically collected by your cluster's logging agent (Fluentd, Fluen
 | `memory_heap` | 150 MB | V8 heap usage |
 | `memory_rss` | 300 MB | Process RSS memory |
 | `redis` | — | Set + get a test key in Redis |
-| `stellar_horizon` | — | HTTP ping to `$STELLAR_HORIZON_URL/health` |
+| `stellar` | 2 seconds | HTTP `GET` to `$STELLAR_HORIZON_URL/health`; failure is critical by default |
+
+Stellar severity is controlled by `STELLAR_HEALTH_CRITICAL`:
+
+- `true` (default): a Horizon failure reports `checks.stellar.status: "down"` and makes `/health` return `503`.
+- `false`: a Horizon failure is reported as `checks.stellar.status: "down"`, but is warning-only and does not make the overall health status fail.
+
+`STELLAR_HORIZON_URL` selects the Horizon base URL. It defaults to the testnet Horizon endpoint, or the mainnet endpoint when `STELLAR_NETWORK=mainnet`. The health request timeout is fixed at 2 seconds.
 
 **Example healthy response:**
 ```json
 {
   "status": "ok",
-  "info": {
+  "checks": {
     "database": { "status": "up" },
     "memory_heap": { "status": "up" },
     "memory_rss": { "status": "up" },
-    "redis": { "status": "up", "message": "Redis is responsive" },
-    "stellar_horizon": { "status": "up" }
-  },
-  "error": {},
-  "details": { ... }
+    "redis": { "status": "up" },
+    "stellar": { "status": "up", "latencyMs": 42 }
+  }
 }
 ```
 
@@ -419,15 +437,15 @@ groups:
           summary: "High HTTP error rate"
           description: "More than 5% of requests are returning 5xx errors for 2 minutes."
 
-      # Slow Stellar RPC calls
-      - alert: StellarRpcSlow
-        expr: histogram_quantile(0.95, rate(stellar_rpc_latency_seconds_bucket[5m])) > 2
+      # Stellar RPC p95 latency above 5 seconds
+      - alert: StellarRpcHighLatency
+        expr: histogram_quantile(0.95, sum(rate(stellar_rpc_latency_seconds_bucket[5m])) by (le)) > 5
         for: 5m
         labels:
-          severity: warning
+          severity: critical
         annotations:
-          summary: "Stellar RPC p95 latency above 2s"
-          description: "95th percentile Stellar RPC latency has exceeded 2 seconds for 5 minutes."
+          summary: "Stellar RPC p95 latency above 5s"
+          description: "95th percentile Stellar RPC latency has exceeded 5 seconds for 5 minutes."
 
       # High heap memory usage
       - alert: HighHeapMemory
@@ -478,7 +496,7 @@ alerting:
 | Signal | Warning | Critical | Source |
 |---|---|---|---|
 | 5xx error rate | > 1% | > 5% | `http_requests_total` |
-| Stellar RPC p95 latency | > 1s | > 2s | `stellar_rpc_latency_seconds` |
+| Stellar RPC p95 latency | > 2s | > 5s | `stellar_rpc_latency_seconds` |
 | Heap memory | > 120 MB | > 150 MB (health check fails) | `nodejs_heap_size_used_bytes` |
 | RSS memory | — | > 300 MB (health check fails) | `process_resident_memory_bytes` |
 | Event loop lag | > 100ms | > 500ms | `nodejs_eventloop_lag_seconds` |
@@ -486,7 +504,157 @@ alerting:
 
 ---
 
+## ALB Access Logs
+
+The Application Load Balancer writes an access log entry for every HTTP request that reaches the platform. These logs are the authoritative record for security forensics and traffic analysis, and back the compliance controls described in `SECURITY.md`.
+
+### Where logs are stored
+
+Access logs are enabled on the ALB resource in the Terraform module (`access_logs { bucket = var.log_bucket, enabled = true }`). The destination bucket is configured with:
+
+| Setting | Value |
+|---|---|
+| Bucket | `var.log_bucket` (name set via `var.log_bucket_name`) |
+| Prefix | `alb/` |
+| Encryption | SSE-S3 (AES-256) server-side encryption |
+| Versioning | Enabled |
+| Retention | 90 days (`var.log_retention_days`, default `90`) via an S3 lifecycle rule that expires objects and non-current versions |
+
+Log objects are delivered as gzipped JSON, one object per ALB node per interval, under `s3://<log_bucket>/alb/`.
+
+### Querying with Athena
+
+Create an external table over the log prefix (adjust the bucket name and region):
+
+```sql
+CREATE EXTERNAL TABLE IF NOT EXISTS alb_access_logs (
+  type string,
+  time string,
+  elb string,
+  client_ip string,
+  client_port int,
+  target_ip string,
+  target_port int,
+  request_processing_time double,
+  target_processing_time double,
+  response_processing_time double,
+  elb_status_code int,
+  target_status_code string,
+  received_bytes bigint,
+  sent_bytes bigint,
+  request_verb string,
+  request_url string,
+  request_proto string,
+  user_agent string,
+  ssl_cipher string,
+  ssl_protocol string,
+  target_group_arn string,
+  trace_id string,
+  domain_name string,
+  chosen_cert_arn string,
+  matched_rule_priority string,
+  request_creation_time string,
+  actions_executed string,
+  redirect_url string,
+  error_reason string
+)
+ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.RegexSerDe'
+WITH SERDEPROPERTIES (
+  'serialization.format' = '1',
+  'input.regex' = '([^ ]*) ([^ ]*) ([^ ]*) ([^ ]*):([0-9]*) ([^ ]*)[:-]([0-9]*) ([-.0-9]*) ([-.0-9]*) ([-.0-9]*) ([-0-9]*) ([-0-9]*) ([-0-9]*) \"([^ ]*) ([^ ]*) (- |[^ ]*)\" \"([^\"]*)\" ([A-Z0-9-]+) ([A-Za-z0-9.-]*) ([^ ]*) \"([^\"]*)\" \"([^\"]*)\" \"([^\"]*)\" ([-.0-9]*) ([^ ]*) \"([^\"]*)\" \"([^\"]*)\" ?([^ ]*)'
+)
+LOCATION 's3://<log_bucket>/alb/'
+TBLPROPERTIES ('skip.header.line.count' = '0');
+```
+
+**Top client IPs (last 7 days):**
+
+```sql
+SELECT client_ip, count(*) AS requests
+FROM alb_access_logs
+WHERE from_iso8601_timestamp(time) > now() - interval '7' day
+GROUP BY client_ip
+ORDER BY requests DESC
+LIMIT 20;
+```
+
+**5xx error rate by hour:**
+
+```sql
+SELECT date_trunc('hour', from_iso8601_timestamp(time)) AS hour,
+       count_if(elb_status_code >= 500) * 100.0 / count(*) AS pct_5xx,
+       count(*) AS requests
+FROM alb_access_logs
+WHERE from_iso8601_timestamp(time) > now() - interval '24' hour
+GROUP BY 1
+ORDER BY 1 DESC;
+```
+
+**Slow requests (target processing time above 2s):**
+
+```sql
+SELECT time, client_ip, request_verb, request_url, target_processing_time, elb_status_code
+FROM alb_access_logs
+WHERE target_processing_time > 2.0
+ORDER BY target_processing_time DESC
+LIMIT 50;
+```
+
+**Most requested paths:**
+
+```sql
+SELECT regexp_extract(request_url, '^[^?]*', 0) AS path, count(*) AS requests
+FROM alb_access_logs
+WHERE from_iso8601_timestamp(time) > now() - interval '24' hour
+GROUP BY 1
+ORDER BY requests DESC
+LIMIT 20;
+```
+
+### Querying with CloudWatch Logs Insights
+
+If the bucket is also subscribed to CloudWatch Logs (or logs are shipped via a subscription filter), use Logs Insights:
+
+```text
+# Top client IPs
+fields @timestamp, client_ip
+| stats count(*) as requests by client_ip
+| sort requests desc
+| limit 20
+```
+
+```text
+# 5xx rate per 5 minutes
+fields @timestamp, elb_status_code
+| stats count(*) as total, sum(elb_status_code >= 500) as errors by bin(5m)
+| fields bin(5m) as window, errors * 100.0 / total as pct_5xx
+```
+
+```text
+# Slow requests
+fields @timestamp, client_ip, request_url, target_processing_time
+| filter target_processing_time > 2.0
+| sort target_processing_time desc
+| limit 50
+```
+
+```text
+# Most requested paths
+fields request_url
+| parse request_url /^(?<path>[^?]*)/
+| stats count(*) as requests by path
+| sort requests desc
+| limit 20
+```
+
+### Verifying the change
+
+Before applying, run `terraform plan` in the environment directory and confirm it shows **no destructive changes** — only the new log bucket, its encryption/versioning/lifecycle configuration, and the `access_logs` block on the ALB should appear. After applying, wait for the first log delivery interval and run one of the queries above to confirm logs are queryable.
+
+---
+
 ## OpenTelemetry Distributed Tracing
+=======
 
 scoopdope uses the [OpenTelemetry Node.js SDK](https://opentelemetry.io/docs/instrumentation/js/) to trace all API requests end-to-end, including PostgreSQL queries and Redis operations.
 

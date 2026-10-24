@@ -117,6 +117,24 @@ Defined in `infra/monitoring/prometheus-rules.yml`:
 | `StellarRpcErrors` | critical | RPC errors detected for 2m |
 | `LowEnrollmentRate` | info | < 1 enrollment/hour over 24h |
 | `NoRecommendationsServed` | warning | No recommendations in 2h |
+| `SecretRotationFailed` | critical | Secrets Manager rotation lambda reports failure for 2m |
+
+## Secret Rotation Notifications
+
+Automatic secret rotation (see `docs/secret-rotation.md`) publishes events to an SNS topic, which fans out to the monitoring Slack channel.
+
+```
+┌──────────────────┐   ┌──────────────────┐   ┌──────────────────┐
+│ Secrets Manager  │──▶│ SNS Topic        │──▶│ Slack            │
+│ rotation lambda  │   │ secret-rotation  │   │ #monitoring      │
+└──────────────────┘   └──────────────────┘   └──────────────────┘
+```
+
+- **SNS topic** — `scoopdope-secret-rotation` (created in the Terraform config alongside the rotation schedules)
+- **Slack channel** — `#monitoring`; rotation success/failure events are posted here
+- **Alert** — `SecretRotationFailed` fires when a rotation lambda reports failure, and is routed to `#incidents` like other critical alerts
+
+Operators should watch `#monitoring` for scheduled rotation events and `#incidents` for rotation failures. If a rotation fails, follow the emergency manual rotation procedure in `docs/secret-rotation.md`.
 
 ## Alertmanager
 

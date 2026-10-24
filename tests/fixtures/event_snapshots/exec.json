@@ -1,0 +1,15 @@
+{
+  "event": "exec",
+  "symbol": "exec",
+  "topics": [
+    "exec",
+    1
+  ],
+  "data": {
+    "executed_at": 1700050000,
+    "votes_for": 75000000000,
+    "votes_against": 12000000000
+  },
+  "raw_bytes_footprint": 144,
+  "max_bytes_budget": 16384
+}

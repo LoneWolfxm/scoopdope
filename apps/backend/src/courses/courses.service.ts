@@ -10,10 +10,29 @@ import { Repository } from 'typeorm';
 import { Cache } from 'cache-manager';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Inject } from '@nestjs/common';
-import { Course, CourseStatus } from './course.entity';
+import { Course, CourseStatus, DifficultyLevel } from './course.entity';
 import { CourseQueryDto } from './dto/course-query.dto';
 import { SearchService } from '../search/search.service';
 import { MetricsService } from '../metrics/metrics.service';
+
+/** Ordered difficulty levels from easiest to hardest. */
+export const DIFFICULTY_ORDER: DifficultyLevel[] = [
+  DifficultyLevel.BEGINNER,
+  DifficultyLevel.INTERMEDIATE,
+  DifficultyLevel.ADVANCED,
+];
+
+/** Map a difficulty level to its numeric rank (0 = beginner). */
+export function difficultyRank(level: DifficultyLevel): number {
+  const index = DIFFICULTY_ORDER.indexOf(level);
+  return index === -1 ? 0 : index;
+}
+
+/** Return the difficulty level at the given rank, clamped to the valid range. */
+export function difficultyFromRank(rank: number): DifficultyLevel {
+  const clamped = Math.max(0, Math.min(DIFFICULTY_ORDER.length - 1, rank));
+  return DIFFICULTY_ORDER[clamped];
+}
 
 /** Result of a single CSV row during a bulk course import. */
 export interface CourseImportRowResult {
@@ -94,6 +113,10 @@ export class CoursesService {
       qb.andWhere('(course.title ILIKE :search OR course.description ILIKE :search)', {
         search: `%${search}%`,
       });
+    }
+
+    if (language) {
+      qb.andWhere('course.language = :language', { language });
     }
 
     const rows = this.parseCsv(file.buffer.toString('utf-8'));
@@ -233,6 +256,57 @@ export class CoursesService {
         }
         continue;
       }
+
+  /**
+   * Assess a learner's current level from their completed course history.
+   * The assessed level is the highest difficulty at which the learner has
+   * completed at least one course. Learners with no completed courses are
+   * assessed as beginners.
+   */
+  async assessLearnerLevel(userId: string): Promise<DifficultyLevel> {
+    const completed = await this.repo
+      .createQueryBuilder('course')
+      .innerJoin('course.enrollments', 'enrollment')
+      .where('enrollment.userId = :userId', { userId })
+      .andWhere('enrollment.status = :status', { status: 'completed' })
+      .select('course.difficultyLevel', 'difficultyLevel')
+      .getRawMany<{ difficultyLevel: DifficultyLevel | null }>();
+
+    let assessedRank = 0;
+    for (const row of completed) {
+      if (!row.difficultyLevel) continue;
+      assessedRank = Math.max(assessedRank, difficultyRank(row.difficultyLevel));
+    }
+    return difficultyFromRank(assessedRank);
+  }
+
+  /**
+   * Recommend courses for a learner, filtered by difficulty. Recommendations
+   * include courses at the learner's assessed level and at most one level
+   * above it. An explicit `difficulty` override replaces auto-detection.
+   */
+  async getRecommendations(
+    userId: string,
+    options: { difficulty?: DifficultyLevel; limit?: number } = {}
+  ): Promise<Course[]> {
+    const { difficulty, limit = 20 } = options;
+
+    const learnerLevel = difficulty ?? (await this.assessLearnerLevel(userId));
+    const maxRank = difficultyRank(learnerLevel) + 1;
+    const allowedLevels = DIFFICULTY_ORDER.filter((lvl) => difficultyRank(lvl) <= maxRank);
+
+    const courses = await this.repo
+      .createQueryBuilder('course')
+      .where('course.status = :publishedStatus', { publishedStatus: CourseStatus.PUBLISHED })
+      .andWhere('course.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('course.difficultyLevel IN (:...allowedLevels)', { allowedLevels })
+      .orderBy('course.difficultyLevel', 'ASC')
+      .addOrderBy('course.createdAt', 'DESC')
+      .take(limit)
+      .getMany();
+
+    return courses;
+  }
 
   private async invalidateCache() {
     await this.cacheManager.del(this.CACHE_KEY).catch(() => {});

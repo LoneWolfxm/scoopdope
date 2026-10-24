@@ -15,6 +15,7 @@ import { Certificate } from './certificates/certificate.entity';
 import { Bundle } from './bundles/bundle.entity';
 import { BundleCourse } from './bundles/bundle-course.entity';
 import { Payment } from './payments/payment.entity';
+import { SupportTicketAttachment } from './support-tickets/support-ticket-attachment.entity';
 
 // ── Modules ─────────────────────────────────────────────────────────────────────
 
@@ -34,6 +35,7 @@ import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { LiveSessionsModule } from './live-sessions/live-sessions.module';
 import { PaymentsModule } from './payments/payments.module';
 import { RewardsModule } from './rewards/rewards.module';
+import { SupportTicketsModule } from './support-tickets/support-tickets.module';
 import { HealthModule } from './health/health.module';
 import * as redisStore from 'cache-manager-redis-store';
 import configuration from './config/configuration';
@@ -98,7 +100,16 @@ export class GracefulShutdownService implements OnApplicationShutdown {
         username: configService.get('database.username'),
         password: configService.get('database.password'),
         database: configService.get('database.name'),
-        entities: [User, Course, Enrollment, Certificate, Bundle, BundleCourse, Payment],
+        entities: [
+          User,
+          Course,
+          Enrollment,
+          Certificate,
+          Bundle,
+          BundleCourse,
+          Payment,
+          SupportTicketAttachment,
+        ],
         synchronize: configService.get('environment') !== 'production',
         logging: configService.get('environment') !== 'production',
       }),
@@ -140,6 +151,7 @@ export class GracefulShutdownService implements OnApplicationShutdown {
     LiveSessionsModule,
     PaymentsModule,
     RewardsModule,
+    SupportTicketsModule,
     RateLimitModule,
     ApiVersionModule,
     MonitoringModule,

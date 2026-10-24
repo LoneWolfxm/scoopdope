@@ -1,0 +1,16 @@
+{
+  "event": "upg_prop",
+  "symbol": "upg_prop",
+  "topics": [
+    "upg_prop",
+    1,
+    "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H"
+  ],
+  "data": {
+    "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "new_wasm_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "voting_end_ledger": 1260000
+  },
+  "raw_bytes_footprint": 196,
+  "max_bytes_budget": 16384
+}

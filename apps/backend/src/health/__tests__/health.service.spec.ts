@@ -4,12 +4,14 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { WINSTON_MODULE_PROVIDER } from 'nest-winston';
 import { HealthCheckService, TypeOrmHealthIndicator, MemoryHealthIndicator } from '@nestjs/terminus';
 import { HealthService } from '../health.service';
+import { StellarHealthIndicator } from '../indicators/stellar.health';
 
 describe('HealthService', () => {
   let service: HealthService;
   let mockHealthCheckService: jest.Mocked<HealthCheckService>;
   let mockDb: jest.Mocked<TypeOrmHealthIndicator>;
   let mockMemory: jest.Mocked<MemoryHealthIndicator>;
+  let mockStellar: jest.Mocked<StellarHealthIndicator>;
   let mockCacheManager: jest.Mocked<any>;
   let mockLogger: jest.Mocked<any>;
   let mockConfigService: jest.Mocked<ConfigService>;
@@ -26,6 +28,10 @@ describe('HealthService', () => {
     mockMemory = {
       checkHeap: jest.fn(),
       checkRSS: jest.fn(),
+    } as any;
+
+    mockStellar = {
+      check: jest.fn(),
     } as any;
 
     mockCacheManager = {
@@ -53,6 +59,7 @@ describe('HealthService', () => {
         { provide: HealthCheckService, useValue: mockHealthCheckService },
         { provide: TypeOrmHealthIndicator, useValue: mockDb },
         { provide: MemoryHealthIndicator, useValue: mockMemory },
+        { provide: StellarHealthIndicator, useValue: mockStellar },
         { provide: CACHE_MANAGER, useValue: mockCacheManager },
         { provide: WINSTON_MODULE_PROVIDER, useValue: mockLogger },
         { provide: ConfigService, useValue: mockConfigService },
@@ -145,12 +152,34 @@ describe('HealthService', () => {
       mockCacheManager.set.mockResolvedValue(undefined);
       mockMemory.checkHeap.mockResolvedValue({ memory_heap: { status: 'up' } } as any);
       mockMemory.checkRSS.mockResolvedValue({ memory_rss: { status: 'up' } } as any);
+      mockStellar.check.mockResolvedValue({
+        stellar: { status: 'up', latencyMs: 12 },
+      } as any);
 
       const result = await service.checkFull();
       expect(result.checks.database).toBeDefined();
       expect(result.checks.redis).toBeDefined();
       expect(result.checks.memory_heap).toBeDefined();
       expect(result.checks.memory_rss).toBeDefined();
+      expect(result.checks.stellar).toMatchObject({ status: 'up', latencyMs: 12 });
+      expect(mockStellar.check).toHaveBeenCalledWith('stellar');
+    });
+
+    it('should fail the full health check when Stellar is unreachable', async () => {
+      mockDb.pingCheck.mockResolvedValue({ database: { status: 'up' } } as any);
+      mockCacheManager.get.mockResolvedValue(null);
+      mockCacheManager.set.mockResolvedValue(undefined);
+      mockMemory.checkHeap.mockResolvedValue({ memory_heap: { status: 'up' } } as any);
+      mockMemory.checkRSS.mockResolvedValue({ memory_rss: { status: 'up' } } as any);
+      mockStellar.check.mockRejectedValue(new Error('RPC unavailable'));
+
+      const result = await service.checkFull();
+
+      expect(result.status).toBe('error');
+      expect(result.checks.stellar).toEqual({
+        status: 'down',
+        message: 'Stellar Horizon is unreachable',
+      });
     });
   });
 });

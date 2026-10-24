@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import { Verifier } from '@pact-foundation/pact';
+import * as fs from 'fs';
 import * as path from 'path';
 import { AppModule } from '../src/app.module';
 import { User } from '../src/users/user.entity';
@@ -20,6 +21,63 @@ describe('Pact Provider Verification', () => {
   let courseRepo: Repository<Course>;
   let verifier: Verifier;
 
+  const providerPort = parseInt(process.env.PACT_PROVIDER_PORT ?? '3000', 10);
+  const providerBaseUrl =
+    process.env.PACT_PROVIDER_BASE_URL ?? `http://localhost:${providerPort}`;
+  const brokerBaseUrl = process.env.PACT_BROKER_BASE_URL;
+  const brokerToken = process.env.PACT_BROKER_TOKEN;
+  const providerVersion =
+    process.env.PACT_PROVIDER_VERSION ??
+    process.env.GITHUB_SHA ??
+    '1.0.0';
+  const pactDir = path.resolve(__dirname, '../../pacts');
+
+  /**
+   * Resolve the pact sources for verification.
+   * - When PACT_BROKER_BASE_URL is set, fetch pacts from the broker.
+   * - Otherwise, read local pact files from the pacts/ directory.
+   * Fails fast if no pacts can be found so CI never silently passes.
+   */
+  const resolvePactSources = (): {
+    pactBrokerUrl?: string;
+    pactBrokerToken?: string;
+    consumerVersionSelectors?: Array<{ mainBranch?: boolean; deployedOrReleased?: boolean }>;
+    providerVersion?: string;
+    publishVerificationResult?: boolean;
+    pactUrls?: string[];
+  } => {
+    if (brokerBaseUrl) {
+      return {
+        pactBrokerUrl: brokerBaseUrl,
+        pactBrokerToken: brokerToken,
+        consumerVersionSelectors: [{ mainBranch: true }, { deployedOrReleased: true }],
+        providerVersion,
+        publishVerificationResult: process.env.CI === 'true',
+      };
+    }
+
+    if (!fs.existsSync(pactDir)) {
+      throw new Error(
+        `Pact directory not found at ${pactDir}. ` +
+          'Run the frontend consumer tests to generate pact files, or set PACT_BROKER_BASE_URL.',
+      );
+    }
+
+    const pactFiles = fs
+      .readdirSync(pactDir)
+      .filter((file) => file.endsWith('.json'))
+      .map((file) => path.join(pactDir, file));
+
+    if (pactFiles.length === 0) {
+      throw new Error(
+        `No pact files found in ${pactDir}. ` +
+          'Run the frontend consumer tests to generate pact files, or set PACT_BROKER_BASE_URL.',
+      );
+    }
+
+    return { pactUrls: pactFiles };
+  };
+
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [
@@ -37,16 +95,16 @@ describe('Pact Provider Verification', () => {
     app = moduleFixture.createNestApplication();
     await app.init();
 
-    // Start the app on a test port so the Verifier can make requests
-    await app.listen(3000);
+    // Start the app on a configurable port so the Verifier can make requests
+    await app.listen(providerPort);
 
     userRepo = app.get(getRepositoryToken(User));
     courseRepo = app.get(getRepositoryToken(Course));
 
     verifier = new Verifier({
       provider: 'Scoopdope-Backend',
-      providerBaseUrl: 'http://localhost:3000',
-      pactUrls: [path.resolve(__dirname, '../../pacts')],
+      providerBaseUrl,
+      ...resolvePactSources(),
       stateHandlers: {
         // ── Auth ──────────────────────────────────────
         'user does not exist': async () => {
@@ -213,6 +271,8 @@ describe('Pact Provider Verification', () => {
   });
 
   it('should verify all pacts from consumers', async () => {
-    await verifier.verifyProvider();
+    // verifyProvider rejects on any mismatch, which fails the test and
+    // causes Jest to exit non-zero so CI can gate merges.
+    await expect(verifier.verifyProvider()).resolves.not.toThrow();
   });
 });

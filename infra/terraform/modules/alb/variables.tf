@@ -29,8 +29,19 @@ variable "certificate_arn" {
   default     = ""
 }
 
+variable "log_bucket" {
+  description = "Name of the S3 bucket where ALB access logs are stored"
+  type        = string
+}
+
 variable "log_bucket_id" {
-  description = "S3 bucket ID for ALB access logs"
+  description = "S3 bucket ID for ALB access logs (deprecated: use log_bucket)"
   type        = string
   default     = ""
+}
+
+variable "log_retention_days" {
+  description = "Number of days to retain ALB access logs in the S3 bucket"
+  type        = number
+  default     = 90
 }

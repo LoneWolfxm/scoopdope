@@ -98,8 +98,20 @@ groups:
           summary: "Stellar RPC latency degraded (p95 > 2s)"
           description: "Stellar RPC 95th percentile latency is {{ $value }}s."
 
+      - alert: StellarRpcHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(stellar_rpc_latency_seconds_bucket[5m])) by (le)
+          ) > 5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Stellar RPC p95 latency above 5s"
+          description: "Stellar RPC 95th percentile latency has exceeded 5 seconds for 5 minutes."
+
       - alert: StellarRpcErrors
-        expr: rate(stellar_rpc_latency_seconds_count{status="error"}[5m]) > 0
+        expr: rate(stellar_rpc_latency_seconds_count{status=~"error|timeout"}[5m]) > 0
         for: 2m
         labels:
           severity: critical

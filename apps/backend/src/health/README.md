@@ -6,7 +6,7 @@ Comprehensive health check endpoints designed for load balancers (AWS ALB, NGINX
 
 | Endpoint | Type | Description | Used By |
 |---|---|---|---|
-| `GET /health` | Full | All dependencies (DB, Redis, Stellar, memory, disk, ES) | Monitoring, smoke tests |
+| `GET /health` | Full | Database, Redis, Stellar Horizon, and memory | Monitoring, smoke tests |
 | `GET /health/live` | Liveness | Process alive, not shutting down (no deps) | Docker HEALTHCHECK, K8s livenessProbe, ECS |
 | `GET /health/ready` | Readiness | Critical deps (DB, Redis) ready for traffic | ALB target group, K8s readinessProbe |
 | `GET /health/startup` | Startup | Application initialized successfully | K8s startupProbe |
@@ -21,8 +21,7 @@ Comprehensive health check endpoints designed for load balancers (AWS ALB, NGINX
 | Redis | ✅ | ✅ | Set/get test value with 1s TTL |
 | Memory Heap | ✅ | ❌ | V8 heap < 150MB |
 | Memory RSS | ✅ | ❌ | Resident Set Size < 300MB |
-| Stellar Horizon | ✅ | ❌ | HTTP ping to Horizon `/health` |
-| Stellar Soroban RPC | ✅ | ❌ | JSON-RPC `getHealth` call |
+| Stellar Horizon | ✅ | ❌ | HTTP `GET` to Horizon `/health` with a 2-second timeout; critical by default |
 | Disk Usage | ✅ | ❌ | Memory-based disk usage < 90% |
 | Elasticsearch | ✅ | ❌ | Cluster health (skipped if not configured) |
 
@@ -214,7 +213,8 @@ API_URL=https://api.scoopdope.example.com PROBE=live ./scripts/health-check.sh
 | Variable | Default | Description |
 |---|---|---|
 | `ENVIRONMENT_NAME` | `NODE_ENV` | Blue/green environment name |
-| `STELLAR_HORIZON_URL` | `https://horizon-testnet.stellar.org` | Horizon endpoint |
+| `STELLAR_HORIZON_URL` | Network-specific Horizon URL | Horizon base URL; health checks call its `/health` path |
+| `STELLAR_HEALTH_CRITICAL` | `true` | Set `false` to report Horizon failures as warning-only |
 | `ELASTICSEARCH_NODE` | `http://localhost:9200` | ES cluster endpoint |
 | `ELASTICSEARCH_API_KEY` | `` | ES API key |
 
