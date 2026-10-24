@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  Query,
   UseGuards,
   Request,
   HttpCode,
@@ -15,9 +16,27 @@ import {
   ApiOperation,
   ApiResponse,
   ApiParam,
+  ApiQuery,
 } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
+import { IsInt, IsOptional, Max, Min } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { BookmarksService } from './bookmarks.service';
+
+export class BookmarksPaginationQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page: number = 1;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit: number = 20;
+}
 
 @ApiTags('bookmarks')
 @ApiBearerAuth()
@@ -93,15 +112,29 @@ export class BookmarksController {
    * GET /v1/bookmarks
    */
   @Get('bookmarks')
-  @ApiOperation({ summary: 'Get all bookmarked lessons for the current user' })
-  @ApiResponse({ status: 200, description: 'Bookmarks list returned' })
+  @ApiOperation({ summary: 'Get paginated bookmarked lessons for the current user' })
+  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number (default 1)' })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    description: 'Items per page (default 20, max 100)',
+  })
+  @ApiResponse({ status: 200, description: 'Paginated bookmarks list returned' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  async getMyBookmarks(@Request() req: any) {
+  async getMyBookmarks(
+    @Request() req: any,
+    @Query() query: BookmarksPaginationQueryDto,
+  ) {
     const userId = req.user.id ?? req.user.sub;
-    const [bookmarks, count] = await Promise.all([
-      this.bookmarksService.getUserBookmarks(userId),
-      this.bookmarksService.getBookmarkCount(userId),
-    ]);
-    return { count, bookmarks };
+    const page = query.page ?? 1;
+    const limit = Math.min(query.limit ?? 20, 100);
+    const { data, total } = await this.bookmarksService.getUserBookmarksPaginated(
+      userId,
+      page,
+      limit,
+    );
+    const lastPage = Math.max(Math.ceil(total / limit), 1);
+    return { data, total, page, lastPage };
   }
 }

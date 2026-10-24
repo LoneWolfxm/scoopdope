@@ -117,13 +117,13 @@ export class Course {
   @JoinColumn({ name: 'categoryId' })
   category: Category | null;
 
-  @OneToMany(() => CourseModule, (m) => m.course)
+  @OneToMany(() => CourseModule, (m) => m.course, { cascade: ['remove'] })
   modules: CourseModule[];
 
-  @OneToMany(() => Review, (review) => review.course)
+  @OneToMany(() => Review, (review) => review.course, { cascade: ['remove'] })
   reviews: Review[];
 
-  @OneToMany(() => CoursePrerequisite, (cp) => cp.course)
+  @OneToMany(() => CoursePrerequisite, (cp) => cp.course, { cascade: ['remove'] })
   prerequisites: CoursePrerequisite[];
 
   averageRating?: number | null;
