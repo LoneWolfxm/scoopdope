@@ -135,6 +135,16 @@ export class EmailService implements OnModuleInit, OnModuleDestroy {
     await this.enqueue(data.userEmail, template.subject, template.html);
   }
 
+  async sendWaitlistConfirmation(data: {
+    userEmail: string;
+    userName: string;
+    position: number;
+    locale?: string;
+  }): Promise<void> {
+    const template = emailTemplates.waitlistConfirmation(data);
+    await this.enqueue(data.userEmail, template.subject, template.html);
+  }
+
   private async notifyPg() {
     if (!this.pgClient) return;
     try {
