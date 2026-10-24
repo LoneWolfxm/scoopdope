@@ -1,0 +1,16 @@
+{
+  "event": "prop_new",
+  "symbol": "prop_new",
+  "topics": [
+    "prop_new",
+    1,
+    "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H"
+  ],
+  "data": {
+    "title": "Protocol Parameter Upgrade to v27",
+    "voting_end_ledger": 1250000,
+    "created_at": 1700000000
+  },
+  "raw_bytes_footprint": 192,
+  "max_bytes_budget": 16384
+}

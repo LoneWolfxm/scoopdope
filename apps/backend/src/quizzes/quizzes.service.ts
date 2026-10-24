@@ -8,6 +8,39 @@ import { QuizAttemptAnswer } from './quiz-attempt-answer.entity';
 import { QuizAnswer } from './quiz-answer.entity';
 import { StreaksService } from '../streaks/streaks.service';
 
+/**
+ * Deterministic PRNG (mulberry32) seeded from a string.
+ * Returns a function producing floats in [0, 1).
+ */
+function createSeededRandom(seed: string): () => number {
+  let h = 1779033703 ^ seed.length;
+  for (let i = 0; i < seed.length; i++) {
+    h = Math.imul(h ^ seed.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  let state = h >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * Deterministic Fisher-Yates shuffle. Returns a new array; does not mutate input.
+ */
+export function seededShuffle<T>(items: T[], seed: string): T[] {
+  const result = [...items];
+  const random = createSeededRandom(seed);
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
 @Injectable()
 export class QuizzesService {
   constructor(
@@ -29,6 +62,30 @@ export class QuizzesService {
       where: { id },
       relations: ['questions', 'questions.answers'],
     });
+  }
+
+  /**
+   * Returns quiz questions with answer options shuffled deterministically
+   * by the given attempt ID, so the order is stable across refreshes
+   * for the duration of a single attempt.
+   */
+  async getQuizForAttempt(id: string, attemptId: string) {
+    const quiz = await this.quizRepo.findOne({
+      where: { id },
+      relations: ['questions', 'questions.answers'],
+    });
+
+    if (!quiz) {
+      return quiz;
+    }
+
+    return {
+      ...quiz,
+      questions: quiz.questions.map((question) => ({
+        ...question,
+        answers: seededShuffle(question.answers, `${attemptId}:${question.id}`),
+      })),
+    };
   }
 
   async addQuestion(quizId: string, data: any) {

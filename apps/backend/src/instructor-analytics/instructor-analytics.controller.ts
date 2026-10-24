@@ -74,12 +74,20 @@ export class InstructorAnalyticsController {
   @ApiResponse({ status: 403, description: 'Forbidden — instructor or admin only' })
   @ApiResponse({ status: 404, description: 'Course not found' })
   getCourseAnalytics(
+    @Request() req: any,
     @Param('id') courseId: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
   ) {
     const filter = this.parseFilter(from, to);
-    return this.instructorAnalyticsService.getCourseAnalytics(courseId, filter);
+    const instructorId = req.user.id ?? req.user.sub;
+    const isAdmin = req.user.role === 'admin';
+    return this.instructorAnalyticsService.getCourseAnalytics(
+      courseId,
+      filter,
+      instructorId,
+      isAdmin,
+    );
   }
 
   private parseFilter(from?: string, to?: string): DateRangeFilter {

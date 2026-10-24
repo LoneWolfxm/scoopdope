@@ -25,9 +25,16 @@ export default () => ({
     username: process.env.DATABASE_USER!,
     password: process.env.DATABASE_PASSWORD!,
     name: process.env.DATABASE_NAME!,
-    poolMin: parseInt(process.env.DATABASE_POOL_MIN || '5', 10),
-    poolMax: parseInt(process.env.DATABASE_POOL_MAX || '20', 10),
-    idleTimeoutMs: parseInt(process.env.DATABASE_IDLE_TIMEOUT_MS || '30000', 10),
+    poolMin: parseInt(process.env.DB_POOL_MIN || process.env.DATABASE_POOL_MIN || '5', 10),
+    poolMax: parseInt(process.env.DB_POOL_MAX || process.env.DATABASE_POOL_MAX || '20', 10),
+    idleTimeoutMs: parseInt(
+      process.env.DB_POOL_IDLE_TIMEOUT_MS || process.env.DATABASE_IDLE_TIMEOUT_MS || '30000',
+      10,
+    ),
+    connectionTimeoutMs: parseInt(
+      process.env.DB_POOL_CONNECTION_TIMEOUT_MS || process.env.DATABASE_CONNECTION_TIMEOUT_MS || '2000',
+      10,
+    ),
   },
 
   jwt: {
@@ -50,6 +57,15 @@ export default () => ({
     tokenContractId: process.env.TOKEN_CONTRACT_ID || '',
     indexerPollIntervalMs: parseInt(process.env.INDEXER_POLL_INTERVAL_MS || '5000', 10),
     webAuthDomain: process.env.STELLAR_WEB_AUTH_DOMAIN || 'localhost',
+  },
+
+  health: {
+    stellarCritical: process.env.STELLAR_HEALTH_CRITICAL?.toLowerCase() !== 'false',
+    stellarHorizonUrl:
+      process.env.STELLAR_HORIZON_URL ||
+      (process.env.STELLAR_NETWORK === 'mainnet'
+        ? 'https://horizon.stellar.org'
+        : 'https://horizon-testnet.stellar.org'),
   },
 
   mail: {
@@ -118,6 +134,8 @@ export default () => ({
 
   exchangeRate: {
     apiKey: process.env.EXCHANGE_RATE_API_KEY || '',
+    baseUrl: process.env.EXCHANGE_RATE_BASE_URL || 'https://open.er-api.com/v6/latest',
+    cacheTtlMs: parseInt(process.env.EXCHANGE_RATE_CACHE_TTL_MS || '3600000', 10),
   },
 
   payouts: {
@@ -133,5 +151,9 @@ export default () => ({
     publicKey: process.env.VAPID_PUBLIC_KEY || '',
     privateKey: process.env.VAPID_PRIVATE_KEY || '',
     subject: process.env.VAPID_SUBJECT || 'mailto:admin@scoopdope.com',
+  },
+
+  survey: {
+    pseudonymizationSecret: process.env.SURVEY_PSEUDONYMIZATION_SECRET || '',
   },
 });

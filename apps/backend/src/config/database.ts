@@ -31,10 +31,10 @@ export function getDatabasePoolSettings(): DatabasePoolSettings {
     user: process.env.DB_USER ?? 'postgres',
     password: process.env.DB_PASSWORD ?? 'postgres',
     database: process.env.DB_NAME ?? 'app',
-    max: toInt(process.env.DB_POOL_MAX, 10),
+    max: toInt(process.env.DB_POOL_MAX, 20),
     min: toInt(process.env.DB_POOL_MIN, 0),
     idleTimeoutMillis: toInt(process.env.DB_POOL_IDLE_TIMEOUT_MS, 30000),
-    connectionTimeoutMillis: toInt(process.env.DB_POOL_CONNECTION_TIMEOUT_MS, 5000),
+    connectionTimeoutMillis: toInt(process.env.DB_POOL_CONNECTION_TIMEOUT_MS, 2000),
   };
 }
 

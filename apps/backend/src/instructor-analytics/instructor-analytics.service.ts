@@ -1,4 +1,4 @@
-import { Injectable, Logger, Inject } from '@nestjs/common';
+import { Injectable, Logger, Inject, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
@@ -65,11 +65,19 @@ export class InstructorAnalyticsService {
 
   /**
    * Get full analytics dashboard for a specific course, optionally filtered by date range.
+   * When `instructorId` is provided, verifies the course belongs to that instructor
+   * (admins bypass the ownership check).
    */
   async getCourseAnalytics(
     courseId: string,
     filter: DateRangeFilter = {},
+    instructorId?: string,
+    isAdmin = false,
   ): Promise<InstructorCourseAnalytics> {
+    if (instructorId) {
+      await this.assertCourseOwnership(courseId, instructorId, isAdmin);
+    }
+
     const cacheKey = `${this.CACHE_PREFIX}${courseId}:${filter.from?.toISOString() ?? ''}:${filter.to?.toISOString() ?? ''}`;
     const cached = await this.cache.get<InstructorCourseAnalytics>(cacheKey);
     if (cached) return cached;
@@ -140,7 +148,9 @@ export class InstructorAnalyticsService {
       .getRawMany<{ courseId: string }>();
 
     const courses = await Promise.all(
-      courseIds.map(({ courseId }) => this.getCourseAnalytics(courseId, filter)),
+      courseIds.map(({ courseId }) =>
+        this.getCourseAnalytics(courseId, filter, instructorId, false),
+      ),
     );
 
     const totalEnrollments = courses.reduce((s, c) => s + c.totalEnrollments, 0);
@@ -173,6 +183,35 @@ export class InstructorAnalyticsService {
   }
 
   // ── Private helpers ──────────────────────────────────────────────────────────
+
+  /**
+   * Ensure the given course is owned by the instructor. Admins bypass the check.
+   * Throws ForbiddenException when the course is not owned by the instructor.
+   */
+  private async assertCourseOwnership(
+    courseId: string,
+    instructorId: string,
+    isAdmin: boolean,
+  ): Promise<void> {
+    if (isAdmin) return;
+
+    const row = await this.enrollmentRepo
+      .createQueryBuilder('e')
+      .innerJoin('courses', 'c', 'c.id = e.courseId')
+      .where('c.id = :courseId', { courseId })
+      .andWhere('c.instructorId = :instructorId', { instructorId })
+      .select('c.id', 'id')
+      .getRawOne<{ id: string }>();
+
+    if (!row) {
+      this.logger.warn(
+        `Instructor ${instructorId} attempted to access analytics for course ${courseId} without ownership`,
+      );
+      throw new ForbiddenException(
+        'You do not have permission to access analytics for this course',
+      );
+    }
+  }
 
   private async countEnrollments(
     courseId: string,

@@ -1,22 +1,49 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { DownloadItem, DownloadStatus } from './download-item.entity';
+import { Enrollment } from '../enrollments/enrollment.entity';
 
 @Injectable()
 export class DownloadsService {
   constructor(
     @InjectRepository(DownloadItem) private repo: Repository<DownloadItem>,
+    @InjectRepository(Enrollment)
+    private enrollmentRepo: Repository<Enrollment>,
   ) {}
+
+  async assertCanDownload(
+    userId: string,
+    role: string,
+    courseId: string,
+  ): Promise<void> {
+    if (role === 'admin' || role === 'instructor') {
+      return;
+    }
+    const enrollment = await this.enrollmentRepo.findOne({
+      where: { userId, courseId },
+    });
+    if (!enrollment) {
+      throw new ForbiddenException(
+        'You must be enrolled in this course to download its materials',
+      );
+    }
+  }
 
   async queueDownload(
     userId: string,
+    role: string,
     courseId: string,
     lessonId?: string,
     lessonTitle?: string,
     fileUrl?: string,
     fileSizeBytes?: number,
   ): Promise<DownloadItem> {
+    await this.assertCanDownload(userId, role, courseId);
     const item = this.repo.create({
       userId,
       courseId,

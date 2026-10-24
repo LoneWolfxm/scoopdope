@@ -20,3 +20,19 @@ export class AddNotes1749000000000 implements MigrationInterface {
     await queryRunner.query(`DROP TABLE IF EXISTS "notes"`);
   }
 }
+
+export class AddNotesSearchVector1749000000001 implements MigrationInterface {
+  public async up(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`
+      ALTER TABLE "notes"
+      ADD COLUMN "searchVector" tsvector
+      GENERATED ALWAYS AS (to_tsvector('english', coalesce("content", ''))) STORED
+    `);
+    await queryRunner.query(`CREATE INDEX "IDX_notes_search_vector" ON "notes" USING GIN ("searchVector")`);
+  }
+
+  public async down(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`DROP INDEX IF EXISTS "IDX_notes_search_vector"`);
+    await queryRunner.query(`ALTER TABLE "notes" DROP COLUMN IF EXISTS "searchVector"`);
+  }
+}

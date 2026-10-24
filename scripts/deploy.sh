@@ -41,6 +41,17 @@ BUILD_PROFILE="release"
 DEPLOYMENT_LOG="${PROJECT_ROOT}/scripts/.deployment-history.json"
 DEPLOYED_CONTRACTS="${PROJECT_ROOT}/scripts/deployed-contracts.json"
 
+# Blue-green deployment configuration
+BLUE_GREEN="${BLUE_GREEN:-false}"
+GREEN_URL="${GREEN_URL:-}"
+BLUE_URL="${BLUE_URL:-}"
+HEALTH_CHECK_SCRIPT="${PROJECT_ROOT}/scripts/health-check.sh"
+HEALTH_CHECK_TIMEOUT="${HEALTH_CHECK_TIMEOUT:-60}"   # seconds to keep polling
+HEALTH_CHECK_INTERVAL="${HEALTH_CHECK_INTERVAL:-5}"  # seconds between attempts
+HEALTH_CHECK_MAX_RETRIES="${HEALTH_CHECK_MAX_RETRIES:-12}"
+SMOKE_TEST_TIMEOUT="${SMOKE_TEST_TIMEOUT:-10}"       # per-request timeout in seconds
+TRAFFIC_STATE_FILE="${TRAFFIC_STATE_FILE:-${PROJECT_ROOT}/scripts/.traffic-target}"
+
 # ============================================================================
 # Helper Functions
 # ============================================================================
@@ -346,6 +357,172 @@ log_deployment_history() {
     log_success "Deployment recorded in history"
 }
 
+# ============================================================================
+# Blue-Green Deployment Functions
+# ============================================================================
+
+# Read the currently active traffic target (blue or green)
+get_active_target() {
+    if [ -f "$TRAFFIC_STATE_FILE" ]; then
+        cat "$TRAFFIC_STATE_FILE"
+    else
+        echo "blue"
+    fi
+}
+
+# Point traffic at the given target (blue or green)
+switch_traffic() {
+    local target="$1"
+    local url
+
+    case "$target" in
+        blue)  url="$BLUE_URL" ;;
+        green) url="$GREEN_URL" ;;
+        *)
+            log_error "Unknown traffic target: $target"
+            return 1
+            ;;
+    esac
+
+    log_info "Switching traffic to ${target} (${url:-unset})..."
+    mkdir -p "$(dirname "$TRAFFIC_STATE_FILE")"
+    echo "$target" > "$TRAFFIC_STATE_FILE"
+    log_success "Traffic now routed to $target"
+}
+
+# Poll GET /health on the green environment until it returns 200
+wait_for_green_health() {
+    log_info "Waiting for green environment health check (GET /health)..."
+
+    if [ -z "$GREEN_URL" ]; then
+        log_error "GREEN_URL is not set; cannot verify green environment health"
+        return 1
+    fi
+
+    if [ ! -x "$HEALTH_CHECK_SCRIPT" ]; then
+        log_error "Health check script not found or not executable: $HEALTH_CHECK_SCRIPT"
+        return 1
+    fi
+
+    local deadline=$(( $(date +%s) + HEALTH_CHECK_TIMEOUT ))
+    local attempt=0
+
+    while [ "$attempt" -lt "$HEALTH_CHECK_MAX_RETRIES" ]; do
+        attempt=$((attempt + 1))
+        log_info "Health check attempt ${attempt}/${HEALTH_CHECK_MAX_RETRIES}..."
+
+        if "$HEALTH_CHECK_SCRIPT" "$GREEN_URL"; then
+            log_success "Green environment is healthy (GET /health returned 200)"
+            return 0
+        fi
+
+        if [ "$(date +%s)" -ge "$deadline" ]; then
+            log_error "Health check timed out after ${HEALTH_CHECK_TIMEOUT}s"
+            return 1
+        fi
+
+        sleep "$HEALTH_CHECK_INTERVAL"
+    done
+
+    log_error "Green environment failed health check after ${HEALTH_CHECK_MAX_RETRIES} attempts"
+    return 1
+}
+
+# Run smoke tests against critical API endpoints on green
+run_smoke_tests() {
+    log_info "Running smoke tests against green environment..."
+
+    if [ -z "$GREEN_URL" ]; then
+        log_error "GREEN_URL is not set; cannot run smoke tests"
+        return 1
+    fi
+
+    # Each entry is "path:expected_status"
+    local endpoints=(
+        "/v1/courses:200"
+        "/v1/courses/search?q=test:200"
+        "/metrics:200"
+        "/api/docs:200"
+    )
+
+    local failures=0
+    local entry path expected actual
+
+    for entry in "${endpoints[@]}"; do
+        path="${entry%%:*}"
+        expected="${entry##*:}"
+
+        actual=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-time "$SMOKE_TEST_TIMEOUT" \
+            "${GREEN_URL}${path}" 2>/dev/null || echo "000")
+
+        if [ "$actual" = "$expected" ]; then
+            log_success "Smoke test passed: GET ${path} -> ${actual}"
+        else
+            log_error "Smoke test failed: GET ${path} -> ${actual} (expected ${expected})"
+            failures=$((failures + 1))
+        fi
+    done
+
+    if [ "$failures" -ne 0 ]; then
+        log_error "Smoke tests failed (${failures} failure(s))"
+        return 1
+    fi
+
+    log_success "All smoke tests passed"
+    return 0
+}
+
+# Roll back traffic to blue
+rollback_to_blue() {
+    local previous_target="$1"
+
+    log_warning "Rolling back traffic to blue..."
+
+    if ! switch_traffic "blue"; then
+        log_error "Automatic rollback to blue FAILED - manual intervention required"
+        return 1
+    fi
+
+    log_success "Rollback complete; traffic restored to blue (was: ${previous_target})"
+    return 0
+}
+
+# Orchestrate the blue-green cutover with health verification
+blue_green_deploy() {
+    local previous_target
+    previous_target=$(get_active_target)
+
+    log_info "Blue-green deployment: current traffic target is ${previous_target}"
+    echo ""
+
+    # 1. Verify green health before any traffic switch
+    if ! wait_for_green_health; then
+        log_error "Green environment is unhealthy; aborting cutover"
+        rollback_to_blue "$previous_target" || true
+        exit 1
+    fi
+    echo ""
+
+    # 2. Run smoke tests against green
+    if ! run_smoke_tests; then
+        log_error "Smoke tests failed; aborting cutover"
+        rollback_to_blue "$previous_target" || true
+        exit 1
+    fi
+    echo ""
+
+    # 3. All checks passed - switch traffic to green
+    if ! switch_traffic "green"; then
+        log_error "Failed to switch traffic to green; rolling back"
+        rollback_to_blue "$previous_target" || true
+        exit 1
+    fi
+    echo ""
+
+    log_success "Blue-green cutover complete: traffic now on green"
+}
+
 # Print deployment summary
 print_summary() {
     local contract_id="$1"
@@ -419,6 +596,12 @@ main() {
     # Verify contract
     verify_contract "$contract_id"
     echo ""
+    
+    # Blue-green cutover with health verification (only when enabled)
+    if [ "$BLUE_GREEN" = "true" ]; then
+        blue_green_deploy
+        echo ""
+    fi
     
     # Update registries
     update_deployment_registry "$contract_id"

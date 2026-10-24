@@ -63,3 +63,48 @@ jobs:
 
       - name: Run build
         run: npm run build --if-present
+
+  certificate-fonts:
+    name: Certificate Font Embedding
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install poppler-utils (pdffonts)
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+
+      - name: Generate sample certificate
+        run: npm run certificates:sample --if-present
+
+      - name: Validate font embedding with pdffonts
+        run: |
+          SAMPLE="apps/backend/src/certificates/sample-certificate.pdf"
+          if [ ! -f "$SAMPLE" ]; then
+            echo "Sample certificate not found at $SAMPLE"
+            exit 1
+          fi
+          echo "pdffonts output for $SAMPLE:"
+          pdffonts "$SAMPLE" | tee /tmp/pdffonts.txt
+          # Skip the two header lines, then verify every font row has 'yes' in the Emb column.
+          FONT_ROWS=$(tail -n +3 /tmp/pdffonts.txt | sed '/^\s*$/d')
+          if [ -z "$FONT_ROWS" ]; then
+            echo "No fonts found in generated certificate"
+            exit 1
+          fi
+          NOT_EMBEDDED=$(echo "$FONT_ROWS" | awk '{ if ($(NF-4) != "yes") print }')
+          if [ -n "$NOT_EMBEDDED" ]; then
+            echo "Found fonts that are not embedded:"
+            echo "$NOT_EMBEDDED"
+            exit 1
+          fi
+          echo "All fonts are embedded."

@@ -8,6 +8,7 @@ export class MetricsService {
   readonly credentialIssuedTotal: Counter;
   readonly bstMintedTotal: Counter;
   readonly stellarRpcLatency: Histogram;
+  readonly stellarRpcTimeouts: Counter;
   readonly cacheHitsTotal: Counter;
   readonly cacheMissesTotal: Counter;
   readonly healthCheckDuration: Histogram;
@@ -15,6 +16,8 @@ export class MetricsService {
   readonly uptimeGauge: Gauge;
   readonly activeConnections: Gauge;
   readonly databasePoolSize: Gauge;
+  readonly databasePoolUtilization: Gauge;
+  readonly databasePoolWaitingCount: Gauge;
   readonly redisConnectedClients: Gauge;
   readonly enrollmentsTotal: Counter;
   readonly coursesCompletedTotal: Counter;
@@ -55,7 +58,14 @@ export class MetricsService {
       name: 'stellar_rpc_latency_seconds',
       help: 'Stellar RPC call latency in seconds',
       labelNames: ['method', 'status'],
-      buckets: [0.1, 0.5, 1, 2, 5],
+      buckets: [0.1, 0.5, 1, 2, 5, 10, 30],
+      registers: [register],
+    });
+
+    this.stellarRpcTimeouts = new Counter({
+      name: 'stellar_rpc_timeouts_total',
+      help: 'Total number of timed out Stellar RPC calls',
+      labelNames: ['method'],
       registers: [register],
     });
 
@@ -104,6 +114,18 @@ export class MetricsService {
       name: 'app_database_pool_size',
       help: 'Database connection pool size',
       labelNames: ['state'],
+      registers: [register],
+    });
+
+    this.databasePoolUtilization = new Gauge({
+      name: 'app_database_pool_utilization',
+      help: 'Database connection pool utilization ratio (active / max)',
+      registers: [register],
+    });
+
+    this.databasePoolWaitingCount = new Gauge({
+      name: 'app_database_pool_waiting_count',
+      help: 'Number of requests waiting for a database connection',
       registers: [register],
     });
 
@@ -174,6 +196,10 @@ export class MetricsService {
     this.stellarRpcLatency.observe({ method, status }, durationSeconds);
   }
 
+  incrementStellarRpcTimeout(method: string) {
+    this.stellarRpcTimeouts.inc({ method });
+  }
+
   incrementCacheHit(cache: string) {
     this.cacheHitsTotal.inc({ cache });
   }
@@ -196,6 +222,32 @@ export class MetricsService {
 
   setDatabasePoolSize(state: string, size: number) {
     this.databasePoolSize.set({ state }, size);
+  }
+
+  setDatabasePoolUtilization(ratio: number) {
+    this.databasePoolUtilization.set(ratio);
+  }
+
+  setDatabasePoolWaitingCount(count: number) {
+    this.databasePoolWaitingCount.set(count);
+  }
+
+  /**
+   * Convenience setter used by DatabasePoolService to publish a full pool snapshot.
+   */
+  setDatabasePoolStats(stats: {
+    total: number;
+    idle: number;
+    active: number;
+    waiting: number;
+    max: number;
+  }) {
+    this.databasePoolSize.set({ state: 'total' }, stats.total);
+    this.databasePoolSize.set({ state: 'idle' }, stats.idle);
+    this.databasePoolSize.set({ state: 'active' }, stats.active);
+    this.databasePoolSize.set({ state: 'max' }, stats.max);
+    this.databasePoolUtilization.set(stats.max > 0 ? stats.active / stats.max : 0);
+    this.databasePoolWaitingCount.set(stats.waiting);
   }
 
   setRedisConnectedClients(count: number) {

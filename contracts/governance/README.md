@@ -88,6 +88,20 @@ Block 11470: Subsequent execution attempts → FAIL (Already executed)
    - Disable the original upgrade (future enhancement)
    - Revert to previous version after execution (if supported)
 
+## Arithmetic Types
+
+All vote count, quorum, and supply arithmetic in this contract uses `i128` rather than `u32`.
+
+### Rationale
+
+- **Overflow safety**: Quorum calculations multiply the total voter count by a percentage value. With `u32`, this overflows once the voter count exceeds roughly 42 million. Using `i128` makes such overflows practically impossible and future-proofs the contract against large voter sets.
+- **Token contract conventions**: Token and governance contracts across the ecosystem standardize on `i128` for balances and vote counts. Matching that convention keeps the governance contract consistent with the token contract it reads voting power from and avoids lossy conversions at the boundary.
+- **Signed semantics**: `i128` is the native type for token amounts in Soroban token contracts, so vote tallies (`votes_for`, `votes_against`) and supply figures share the same representation.
+
+### Checked Arithmetic
+
+All arithmetic on these values uses checked operations (e.g. `checked_mul`, `checked_add`) and returns an explicit error instead of panicking on overflow. This guarantees that even adversarial or extreme inputs cannot cause an arithmetic panic; they surface as a contract error instead.
+
 ## Data Storage
 
 ### Proposal Records

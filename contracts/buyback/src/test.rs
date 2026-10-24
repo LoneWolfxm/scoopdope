@@ -1,7 +1,8 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::testutils::{Address as _, Ledger};
+use soroban_sdk::testutils::{Address as _, Events as _, Ledger};
+use soroban_sdk::{IntoVal, Symbol, TryIntoVal};
 
 const MIN_RESERVE: i128 = 1_000_0000000;
 
@@ -230,4 +231,136 @@ fn test_get_buyback_history_pagination() {
     assert_eq!(client.get_buyback_history(&0, &2).len(), 2);
     assert_eq!(client.get_buyback_history(&2, &10).len(), 1);
     assert_eq!(client.get_buyback_history(&5, &10).len(), 0);
+}
+
+/// Returns the payload of the last event whose first topic matches `name`.
+fn last_event_payload(
+    env: &Env,
+    contract_id: &Address,
+    name: &str,
+) -> Option<(Vec<Val>, Val)> {
+    let expected = Symbol::new(env, name);
+    let events = env.events().all();
+    let mut found = None;
+    for i in 0..events.len() {
+        let (emitter, topics, data) = events.get(i).unwrap();
+        if &emitter != contract_id || topics.len() == 0 {
+            continue;
+        }
+        let first: Symbol = topics.get(0).unwrap().try_into_val(env).unwrap();
+        if first == expected {
+            found = Some((topics, data));
+        }
+    }
+    found
+}
+
+#[test]
+fn test_buyback_executed_event_emitted_on_manual_buyback() {
+    let (env, client, admin) = setup();
+    let contract_id = client.address.clone();
+    enable(&client, &admin);
+    client.add_to_reserve(&Address::generate(&env), &(2 * MIN_RESERVE));
+
+    let xlm = 1_000_000_000;
+    client.manual_buyback(&admin, &xlm);
+
+    let (topics, data) = last_event_payload(&env, &contract_id, "buyback_executed")
+        .expect("buyback_executed event not emitted");
+    assert_eq!(topics.len(), 2);
+    let reason: Symbol = topics.get(1).unwrap().try_into_val(&env).unwrap();
+    assert_eq!(reason, symbol_short!("manual"));
+
+    let expected_bst = xlm * 1_000_000 / 2000;
+    let payload: BuybackExecutedEvent = data.try_into_val(&env).unwrap();
+    assert_eq!(payload.xlm_spent, xlm);
+    assert_eq!(payload.amount_bought, expected_bst);
+    assert_eq!(payload.bst_price, 2000);
+    assert_eq!(payload.trigger_reason, symbol_short!("manual"));
+    assert_eq!(payload.ledger, env.ledger().sequence());
+}
+
+#[test]
+fn test_buyback_executed_event_emitted_on_threshold_trigger() {
+    let (env, client, admin) = setup();
+    let contract_id = client.address.clone();
+    enable(&client, &admin);
+    client.add_to_reserve(&Address::generate(&env), &(2 * MIN_RESERVE));
+    env.ledger().with_mut(|l| l.sequence_number = 5_000);
+
+    client.check_and_execute_buyback();
+
+    let (topics, data) = last_event_payload(&env, &contract_id, "buyback_executed")
+        .expect("buyback_executed event not emitted");
+    let reason: Symbol = topics.get(1).unwrap().try_into_val(&env).unwrap();
+    assert_eq!(reason, symbol_short!("threshold"));
+
+    let expected_xlm = MIN_RESERVE.min(100_000_0000000 * 2000 / 1_000_000);
+    let payload: BuybackExecutedEvent = data.try_into_val(&env).unwrap();
+    assert_eq!(payload.xlm_spent, expected_xlm);
+    assert_eq!(payload.trigger_reason, symbol_short!("threshold"));
+    assert_eq!(payload.ledger, 5_000);
+}
+
+#[test]
+fn test_no_buyback_executed_event_when_disabled() {
+    let (env, client, _admin) = setup();
+    let contract_id = client.address.clone();
+    client.add_to_reserve(&Address::generate(&env), &(2 * MIN_RESERVE));
+    env.ledger().with_mut(|l| l.sequence_number = 5_000);
+
+    client.check_and_execute_buyback();
+
+    assert!(last_event_payload(&env, &contract_id, "buyback_executed").is_none());
+}
+
+#[test]
+fn test_buyback_scheduled_event_emitted() {
+    let (env, client, admin) = setup();
+    let contract_id = client.address.clone();
+    enable(&client, &admin);
+    client.add_to_reserve(&Address::generate(&env), &(2 * MIN_RESERVE));
+    env.ledger().with_mut(|l| l.sequence_number = 5_000);
+
+    let schedule_id = client.schedule_buyback(&admin, &1_000_000, &5_100);
+
+    let (topics, data) = last_event_payload(&env, &contract_id, "buyback_scheduled")
+        .expect("buyback_scheduled event not emitted");
+    assert_eq!(topics.len(), 1);
+
+    let payload: BuybackScheduledEvent = data.try_into_val(&env).unwrap();
+    assert_eq!(payload.schedule_id, schedule_id);
+    assert_eq!(payload.xlm_amount, 1_000_000);
+    assert_eq!(payload.execute_at_ledger, 5_100);
+}
+
+#[test]
+fn test_buyback_cancelled_event_emitted() {
+    let (env, client, admin) = setup();
+    let contract_id = client.address.clone();
+    enable(&client, &admin);
+    client.add_to_reserve(&Address::generate(&env), &(2 * MIN_RESERVE));
+    env.ledger().with_mut(|l| l.sequence_number = 5_000);
+
+    let schedule_id = client.schedule_buyback(&admin, &1_000_000, &5_100);
+    client.cancel_scheduled_buyback(&admin, &schedule_id);
+
+    let (topics, data) = last_event_payload(&env, &contract_id, "buyback_cancelled")
+        .expect("buyback_cancelled event not emitted");
+    assert_eq!(topics.len(), 1);
+
+    let payload: BuybackCancelledEvent = data.try_into_val(&env).unwrap();
+    assert_eq!(payload.schedule_id, schedule_id);
+}
+
+#[test]
+fn test_no_buyback_cancelled_event_for_unknown_schedule() {
+    let (env, client, admin) = setup();
+    let contract_id = client.address.clone();
+    enable(&client, &admin);
+
+    // Cancelling a non-existent schedule must not emit a cancellation event.
+    let _ = client.try_cancel_scheduled_buyback(&admin, &999);
+
+    assert!(last_event_payload(&env, &contract_id, "buyback_cancelled").is_none());
 }

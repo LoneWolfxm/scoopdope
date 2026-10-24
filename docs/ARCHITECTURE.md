@@ -1,111 +1,87 @@
-# System Architecture
+# Architecture
 
-This document provides a visual overview of the system architecture, covering the
-API layer, blockchain integration, database, and notification subsystems.
+The diagram below shows the full system — all layers, contracts, external services, and the data flow for key operations.
 
-## High-Level Overview
+![scoopdope Architecture](./architecture.svg)
 
-```mermaid
-flowchart TB
-    subgraph Clients
-        Web[Web App]
-        Mobile[Mobile App]
-        ThirdParty[Third-Party Integrations]
-    end
+## Layers
 
-    subgraph API["API Layer"]
-        REST[REST / HTTP Endpoints]
-        Auth[Authentication & Authorization]
-        Validation[Request Validation]
-    end
+### Client
+| Component | Role |
+|---|---|
+| Next.js 14 (App Router) | SSR/SSG frontend, course UI, profile, credentials |
+| Freighter Wallet | Browser extension; signs SEP-0010 challenges for wallet auth |
+| socket.io-client | Receives real-time notifications over WebSocket |
 
-    subgraph Services["Core Services"]
-        Business[Business Logic]
-        Notifications[Notification Service]
-    end
+### Backend (NestJS, port 3000)
+| Module | Responsibility |
+|---|---|
+| Auth | JWT issuance, refresh, MFA, SEP-0010 Stellar auth |
+| Courses | Course/module/lesson CRUD, reviews, forums |
+| Progress | Enrollment, lesson completion, on-chain progress recording |
+| Credentials | Issue & verify tamper-proof certificates; PDF export |
+| StellarService | Wraps Horizon + Soroban RPC; `mintReward`, `issueCredential`, `recordProgress` |
+| Notifications | REST + WebSocket gateway; emits events on enrollment, completion, credential issuance |
+| Users | Profiles, KYC, referral codes |
 
-    subgraph Blockchain["Blockchain Integration"]
-        Web3[Web3 / RPC Client]
-        Contracts[Smart Contracts]
-        Indexer[Event Indexer]
-    end
+### Data Stores
+| Store | Usage |
+|---|---|
+| PostgreSQL | All relational data — users, courses, progress, credentials, notifications |
+| Redis | Response cache, session data, rate-limit counters |
 
-    subgraph Data["Data Layer"]
-        DB[(Database)]
-        Cache[(Cache)]
-    end
+### Stellar Network
+| Service | Usage |
+|---|---|
+| Horizon API | Account balances, transaction submission fallback |
+| Soroban RPC | Smart contract invocation and simulation |
 
-    subgraph External["External Providers"]
-        Email[Email Provider]
-        Push[Push Provider]
-        Webhooks[Webhook Targets]
-    end
+### Smart Contracts (Rust / wasm32)
+| Contract | Key functions |
+|---|---|
+| Analytics | `record_progress()`, `get_progress()` — per-student on-chain progress % |
+| Token (BST) | `mint_reward()`, `balance()`, `transfer()` — BST reward token |
+| Certificate | `issue_credential()`, `verify()` — tamper-proof on-chain certificates |
+| Governance | `propose()`, `vote()`, `execute()` — DAO governance |
+| Shared | RBAC, reentrancy guard, common validation — imported by all contracts |
 
-    Web --> REST
-    Mobile --> REST
-    ThirdParty --> REST
+## Key Data Flows
 
-    REST --> Auth
-    REST --> Validation
-    Auth --> Business
-    Validation --> Business
-
-    Business --> DB
-    Business --> Cache
-    Business --> Web3
-    Business --> Notifications
-
-    Web3 --> Contracts
-    Contracts --> Indexer
-    Indexer --> DB
-
-    Notifications --> Email
-    Notifications --> Push
-    Notifications --> Webhooks
+### Enrollment
+```
+User → POST /v1/enrollments → EnrollmentsService → PostgreSQL
+                                                  → NotificationsService → WS emit
 ```
 
-## Components
+### Progress & Credential Issuance
+```
+User → POST /v1/progress → ProgressService → StellarService.recordProgress()
+                                           → Analytics contract (on-chain %)
+                         → [at 100%] CredentialsService.issue()
+                                   → StellarService.issueCredential()
+                                   → Certificate contract
+                         → [at 100%, first course] StellarService.mintReward(referrer, 50)
+                                                  → Token contract
+                         → NotificationsService.create() → WS emit to user
+```
 
-### API Layer
-- **REST / HTTP Endpoints** — Public entry points for clients and integrations.
-- **Authentication & Authorization** — Verifies caller identity and permissions.
-- **Request Validation** — Ensures incoming payloads conform to expected schemas.
+### Token Reward (Referral)
+```
+Registration with ?ref=CODE → referredBy set on User
+First course completion     → Token contract: mint 50 BST to referrer's Stellar address
+```
 
-### Core Services
-- **Business Logic** — Orchestrates domain operations and coordinates other subsystems.
-- **Notification Service** — Dispatches user-facing and system notifications.
+### Real-time Notifications
+```
+Any service event → NotificationsService.create()
+                  → NotificationsGateway.emitToUser()
+                  → socket.io room user:<id>
+                  → Frontend bell badge increments
+```
 
-### Blockchain Integration
-- **Web3 / RPC Client** — Communicates with blockchain nodes.
-- **Smart Contracts** — On-chain logic invoked by the application.
-- **Event Indexer** — Listens for on-chain events and persists relevant state.
-
-### Data Layer
-- **Database** — Primary persistent store for application and indexed data.
-- **Cache** — Speeds up frequently accessed reads.
-
-### External Providers
-- **Email / Push / Webhook Targets** — Delivery channels used by the notification service.
-
-## Request Flow
-
-```mermaid
-sequenceDiagram
-    participant Client
-    participant API
-    participant Service
-    participant DB
-    participant Chain as Blockchain
-    participant Notify as Notifications
-
-    Client->>API: HTTP Request
-    API->>API: Authenticate & Validate
-    API->>Service: Invoke business logic
-    Service->>DB: Read / Write
-    Service->>Chain: Submit / Query transaction
-    Chain-->>Service: Confirmation / Event
-    Service->>Notify: Emit notification
-    Notify-->>Client: Email / Push / Webhook
-    Service-->>API: Result
-    API-->>Client: HTTP Response
+### Wallet Auth (SEP-0010)
+```
+Freighter signs challenge XDR → POST /v1/auth/stellar
+                              → StellarAuthService.verifyChallenge()
+                              → JWT issued
 ```

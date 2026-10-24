@@ -4,9 +4,37 @@ import { Repository, ILike } from 'typeorm';
 import { Note } from './note.entity';
 import { CreateNoteDto, UpdateNoteDto } from './note.dto';
 
+export interface NoteSearchResult extends Note {
+  highlight: string;
+}
+
 @Injectable()
 export class NotesService {
   constructor(@InjectRepository(Note) private repo: Repository<Note>) {}
+
+  async search(userId: string, query: string): Promise<NoteSearchResult[]> {
+    if (!query || !query.trim()) return [];
+
+    const qb = this.repo
+      .createQueryBuilder('note')
+      .select('note.id', 'id')
+      .addSelect('note.userId', 'userId')
+      .addSelect('note.lessonId', 'lessonId')
+      .addSelect('note.content', 'content')
+      .addSelect('note.timestamp', 'timestamp')
+      .addSelect('note.createdAt', 'createdAt')
+      .addSelect('note.updatedAt', 'updatedAt')
+      .addSelect(
+        `ts_headline('english', note.content, plainto_tsquery('english', :q))`,
+        'highlight',
+      )
+      .where('note.userId = :userId', { userId })
+      .andWhere(`note.searchVector @@ plainto_tsquery('english', :q)`, { q: query })
+      .orderBy(`ts_rank(note.searchVector, plainto_tsquery('english', :q))`, 'DESC');
+
+    const rows = await qb.getRawMany<NoteSearchResult>();
+    return rows;
+  }
 
   findByLesson(userId: string, lessonId: string, search?: string): Promise<Note[]> {
     return this.repo.find({

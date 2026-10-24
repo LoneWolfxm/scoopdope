@@ -17,6 +17,11 @@ interface Session {
   instructorId: string;
 }
 
+/** Participants with no heartbeat for this long are treated as disconnected. */
+const HEARTBEAT_TTL_MS = 60_000;
+/** How often the server sweeps for stale participants. */
+const HEARTBEAT_SWEEP_INTERVAL_MS = 10_000;
+
 /**
  * Real-time collaboration gateway for instructors working on the same course.
  *
@@ -35,10 +40,28 @@ export class CollaborationGateway implements OnGatewayConnection, OnGatewayDisco
   /** socketId -> session, so we can clear presence on disconnect. */
   private readonly sockets = new Map<string, Session>();
 
+  /** courseId -> instructorId -> last heartbeat timestamp (ms). */
+  private readonly heartbeats = new Map<string, Map<string, number>>();
+
+  private sweepTimer?: NodeJS.Timeout;
+
   constructor(
     private readonly presence: PresenceService,
     private readonly jwtService: JwtService,
   ) {}
+
+  afterInit(): void {
+    this.sweepTimer = setInterval(() => this.sweepStaleParticipants(), HEARTBEAT_SWEEP_INTERVAL_MS);
+    // Do not keep the process alive just for the sweep.
+    this.sweepTimer.unref?.();
+  }
+
+  onModuleDestroy(): void {
+    if (this.sweepTimer) {
+      clearInterval(this.sweepTimer);
+      this.sweepTimer = undefined;
+    }
+  }
 
   async handleConnection(client: Socket): Promise<void> {
     const token = client.handshake.auth?.token as string | undefined;
@@ -62,9 +85,24 @@ export class CollaborationGateway implements OnGatewayConnection, OnGatewayDisco
     const { courseId, instructorId, editingResource } = data;
     this.sockets.set(client.id, { courseId, instructorId });
     this.presence.join(courseId, instructorId, editingResource);
+    this.touchHeartbeat(courseId, instructorId);
     client.join(courseId);
     this.broadcastPresence(courseId);
     return { event: 'joined', courseId, instructorId };
+  }
+
+  @SubscribeMessage('heartbeat')
+  onHeartbeat(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data?: { courseId?: string; instructorId?: string },
+  ) {
+    const session = this.sockets.get(client.id);
+    const courseId = data?.courseId ?? session?.courseId;
+    const instructorId = data?.instructorId ?? session?.instructorId;
+    if (!courseId || !instructorId) return { ok: false };
+    this.presence.touch(courseId, instructorId);
+    this.touchHeartbeat(courseId, instructorId);
+    return { ok: true, at: Date.now() };
   }
 
   @SubscribeMessage('course-update')
@@ -112,6 +150,7 @@ export class CollaborationGateway implements OnGatewayConnection, OnGatewayDisco
     const session = this.sockets.get(client.id);
     if (!session) return { left: false };
     this.presence.leave(session.courseId, session.instructorId);
+    this.clearHeartbeat(session.courseId, session.instructorId);
     client.leave(session.courseId);
     this.sockets.delete(client.id);
     this.broadcastPresence(session.courseId);
@@ -122,7 +161,12 @@ export class CollaborationGateway implements OnGatewayConnection, OnGatewayDisco
     const session = this.sockets.get(client.id);
     if (!session) return;
     this.presence.leave(session.courseId, session.instructorId);
+    this.clearHeartbeat(session.courseId, session.instructorId);
     this.sockets.delete(client.id);
+    // Remove the socket from every room it was in, not just the course room.
+    for (const room of client.rooms) {
+      if (room !== client.id) client.leave(room);
+    }
     this.broadcastPresence(session.courseId);
     this.logger.log(`socket ${client.id} disconnected; cleared presence for ${session.instructorId}`);
   }
@@ -138,5 +182,48 @@ export class CollaborationGateway implements OnGatewayConnection, OnGatewayDisco
 
   private broadcastPresence(courseId: string): void {
     this.server.to(courseId).emit('presence', this.presence.getActive(courseId));
+  }
+
+  private touchHeartbeat(courseId: string, instructorId: string): void {
+    let course = this.heartbeats.get(courseId);
+    if (!course) {
+      course = new Map<string, number>();
+      this.heartbeats.set(courseId, course);
+    }
+    course.set(instructorId, Date.now());
+  }
+
+  private clearHeartbeat(courseId: string, instructorId: string): void {
+    const course = this.heartbeats.get(courseId);
+    if (!course) return;
+    course.delete(instructorId);
+    if (course.size === 0) this.heartbeats.delete(courseId);
+  }
+
+  /** Treat participants with no heartbeat within the TTL as disconnected. */
+  private sweepStaleParticipants(): void {
+    const now = Date.now();
+    for (const [courseId, course] of this.heartbeats) {
+      let changed = false;
+      for (const [instructorId, lastSeen] of course) {
+        if (now - lastSeen <= HEARTBEAT_TTL_MS) continue;
+        course.delete(instructorId);
+        this.presence.leave(courseId, instructorId);
+        // Drop any sockets belonging to the stale participant.
+        for (const [socketId, session] of this.sockets) {
+          if (session.courseId === courseId && session.instructorId === instructorId) {
+            this.sockets.delete(socketId);
+            const socket = this.server?.sockets?.sockets?.get(socketId);
+            socket?.disconnect(true);
+          }
+        }
+        changed = true;
+        this.logger.warn(
+          `participant ${instructorId} timed out in course ${courseId}; removed from presence`,
+        );
+      }
+      if (course.size === 0) this.heartbeats.delete(courseId);
+      if (changed) this.broadcastPresence(courseId);
+    }
   }
 }

@@ -11,9 +11,21 @@ export class CouponsService {
     private couponsRepository: Repository<Coupon>,
   ) {}
 
+  private normalizeCode(code: string): string {
+    const normalized = (code ?? '').toUpperCase();
+    if (!/^[A-Z0-9_-]{4,20}$/.test(normalized)) {
+      throw new BadRequestException(
+        'Coupon code must be 4-20 characters and contain only letters, numbers, hyphens, or underscores',
+      );
+    }
+    return normalized;
+  }
+
   async create(dto: CreateCouponDto): Promise<Coupon> {
+    const code = this.normalizeCode(dto.code);
+
     const existing = await this.couponsRepository.findOne({
-      where: { code: dto.code },
+      where: { code },
     });
     if (existing) {
       throw new BadRequestException('Coupon code already exists');
@@ -21,6 +33,7 @@ export class CouponsService {
 
     const coupon = this.couponsRepository.create({
       ...dto,
+      code,
       expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
     });
     return this.couponsRepository.save(coupon);
@@ -35,7 +48,7 @@ export class CouponsService {
   ): Promise<Coupon[]> {
     const coupons = [];
     for (let i = 0; i < count; i++) {
-      const code = `${prefix}-${Date.now()}-${i}`;
+      const code = `${prefix}-${Date.now()}-${i}`.toUpperCase();
       const coupon = this.couponsRepository.create({
         code,
         discountType,
@@ -51,7 +64,8 @@ export class CouponsService {
     code: string,
     priceUsd: number,
   ): Promise<{ valid: boolean; discount: number; discountType: 'percentage' | 'fixed' }> {
-    const coupon = await this.couponsRepository.findOne({ where: { code } });
+    const normalizedCode = (code ?? '').toUpperCase();
+    const coupon = await this.couponsRepository.findOne({ where: { code: normalizedCode } });
 
     if (!coupon || !coupon.isActive) return { valid: false, discount: 0, discountType: 'fixed' };
     if (coupon.expiresAt && new Date() > coupon.expiresAt) return { valid: false, discount: 0, discountType: 'fixed' };
@@ -66,8 +80,9 @@ export class CouponsService {
   }
 
   async validate(dto: ValidateCouponDto): Promise<{ valid: boolean; discount: number }> {
+    const code = this.normalizeCode(dto.code);
     const coupon = await this.couponsRepository.findOne({
-      where: { code: dto.code },
+      where: { code },
     });
 
     if (!coupon) {
@@ -94,7 +109,7 @@ export class CouponsService {
 
   async incrementUsage(code: string): Promise<void> {
     await this.couponsRepository.increment(
-      { code },
+      { code: (code ?? '').toUpperCase() },
       'usageCount',
       1,
     );

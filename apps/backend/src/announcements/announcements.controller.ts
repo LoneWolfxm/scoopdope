@@ -59,8 +59,17 @@ export class AnnouncementsController {
   @ApiResponse({ status: 404, description: 'Course not found' })
   @ApiResponse({ status: 429, description: 'Too many requests' })
   @ApiResponse({ status: 500, description: 'Internal server error' })
-  create(@Request() req: { user: { id: string } }, @Body() dto: CreateAnnouncementDto) {
-    return this.service.create(req.user.id, dto.courseId, dto.title, dto.body);
+  create(
+    @Request() req: { user: { id: string; role?: string } },
+    @Body() dto: CreateAnnouncementDto,
+  ) {
+    return this.service.create(
+      req.user.id,
+      dto.courseId,
+      dto.title,
+      dto.body,
+      req.user.role,
+    );
   }
 
   /**

@@ -5,6 +5,7 @@ use soroban_sdk::{
 
 pub mod staking;
 pub mod airdrop;
+pub mod pausable;
 
 #[cfg(test)]
 mod fuzz_tests;
@@ -25,6 +26,7 @@ pub enum DataKey {
     VestingV2(Address, u32),     // (beneficiary, schedule_id)
     VestingScheduleCount(Address), // count of schedules per beneficiary
     VestingAnalytics,
+    Paused,
 }
 
 // =============================================================================
@@ -79,6 +81,8 @@ const TRANSFER: Symbol = symbol_short!("transfer");
 const APPROVE: Symbol = symbol_short!("approve");
 const MINT: Symbol = symbol_short!("mint");
 const BURN: Symbol = symbol_short!("burn");
+const PAUSED: Symbol = symbol_short!("paused");
+const UNPAUSED: Symbol = symbol_short!("unpaused");
 const MAX_SUPPLY: i128 = 10_000_000_000_000_000; // 1 billion BST with 7 decimals
 
 // =============================================================================
@@ -200,6 +204,7 @@ impl TokenContract {
     // -------------------------------------------------------------------------
 
     pub fn mint(env: Env, to: Address, amount: i128) {
+        pausable::check_not_paused(&env);
         assert!(amount > 0, "Amount must be positive");
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         admin.require_auth();
@@ -293,6 +298,7 @@ impl TokenContract {
     // -------------------------------------------------------------------------
 
     pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+        pausable::check_not_paused(&env);
         if amount == 0 {
             panic!("amount must be greater than zero");
         }
@@ -335,6 +341,7 @@ impl TokenContract {
     }
 
     pub fn transfer_from(env: Env, spender: Address, from: Address, to: Address, amount: i128) {
+        pausable::check_not_paused(&env);
         assert!(amount > 0, "Amount must be positive");
         spender.require_auth();
 
@@ -620,6 +627,7 @@ impl TokenContract {
     // -------------------------------------------------------------------------
 
     pub fn mint_reward(env: Env, caller: Address, recipient: Address, amount: i128) {
+        pausable::check_not_paused(&env);
         acquire_lock(&env);
 
         caller.require_auth();
@@ -632,6 +640,35 @@ impl TokenContract {
 
         env.events()
             .publish((MINT, symbol_short!("to"), recipient), amount);
+    }
+
+    // -------------------------------------------------------------------------
+    // Pause / unpause (admin only) — used by the key compromise runbook to
+    // freeze the token contract on-chain.
+    // -------------------------------------------------------------------------
+
+    /// Freeze minting and transfers. Admin only.
+    pub fn pause(env: Env, admin: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        assert!(admin == stored_admin, "Only admin can pause");
+        pausable::pause(&env);
+        env.events().publish((PAUSED, symbol_short!("admin"), admin), ());
+    }
+
+    /// Resume minting and transfers. Admin only.
+    pub fn unpause(env: Env, admin: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        assert!(admin == stored_admin, "Only admin can unpause");
+        pausable::unpause(&env);
+        env.events()
+            .publish((UNPAUSED, symbol_short!("admin"), admin), ());
+    }
+
+    /// Returns true when the contract is paused.
+    pub fn is_paused(env: Env) -> bool {
+        pausable::is_paused(&env)
     }
 
     // -------------------------------------------------------------------------
@@ -1326,6 +1363,71 @@ mod tests {
         assert_eq!(client.balance(&instructor1), half_supply);
         assert_eq!(client.balance(&instructor2), half_supply);
         assert_eq!(client.total_supply(), MAX_SUPPLY);
+    }
+
+    // ---- Pause / unpause (key compromise freeze) ----------------------------
+
+    #[test]
+    fn test_pause_blocks_mint_and_transfer() {
+        let (_, client, admin) = setup();
+        let alice = Address::generate(&client.env);
+        let bob = Address::generate(&client.env);
+        client.mint(&alice, &1000);
+
+        assert!(!client.is_paused());
+        client.pause(&admin);
+        assert!(client.is_paused());
+
+        // Transfers are frozen.
+        let res = client.try_transfer(&alice, &bob, &100);
+        assert!(res.is_err());
+
+        // Minting is frozen.
+        let res = client.try_mint(&bob, &100);
+        assert!(res.is_err());
+
+        // transfer_from is frozen.
+        client.approve(&alice, &bob, &100);
+        let res = client.try_transfer_from(&bob, &alice, &bob, &50);
+        assert!(res.is_err());
+
+        // Balances untouched.
+        assert_eq!(client.balance(&alice), 1000);
+        assert_eq!(client.balance(&bob), 0);
+    }
+
+    #[test]
+    fn test_unpause_restores_mint_and_transfer() {
+        let (_, client, admin) = setup();
+        let alice = Address::generate(&client.env);
+        let bob = Address::generate(&client.env);
+        client.mint(&alice, &1000);
+
+        client.pause(&admin);
+        client.unpause(&admin);
+        assert!(!client.is_paused());
+
+        client.transfer(&alice, &bob, &100);
+        client.mint(&bob, &50);
+        assert_eq!(client.balance(&alice), 900);
+        assert_eq!(client.balance(&bob), 150);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only admin can pause")]
+    fn test_non_admin_cannot_pause() {
+        let (env, client, _) = setup();
+        let rando = Address::generate(&env);
+        client.pause(&rando);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only admin can unpause")]
+    fn test_non_admin_cannot_unpause() {
+        let (env, client, admin) = setup();
+        let rando = Address::generate(&env);
+        client.pause(&admin);
+        client.unpause(&rando);
     }
 
     #[test]

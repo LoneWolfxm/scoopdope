@@ -1,7 +1,7 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, UnprocessableEntityException } from '@nestjs/common';
 import { EnrollmentsService } from './enrollments.service';
 import { Enrollment } from './enrollment.entity';
 import { ProgressService } from '../progress/progress.service';
@@ -64,6 +64,7 @@ describe('Enrollment flow (integration)', () => {
   let progressRepo: ReturnType<typeof inMemoryRepo<Progress>>;
   let credentialRepo: ReturnType<typeof inMemoryRepo<Credential>>;
   let eventEmitter: { emit: jest.Mock };
+  let prerequisites: { enforcePrerequisites: jest.Mock };
 
   const stellar = {
     recordEnrollment: jest.fn().mockResolvedValue('tx-enroll'),
@@ -77,6 +78,7 @@ describe('Enrollment flow (integration)', () => {
     progressRepo = inMemoryRepo<Progress>();
     credentialRepo = inMemoryRepo<Credential>();
     eventEmitter = { emit: jest.fn() };
+    prerequisites = { enforcePrerequisites: jest.fn().mockResolvedValue(undefined) };
 
     const course = {
       id: courseId,
@@ -99,7 +101,7 @@ describe('Enrollment flow (integration)', () => {
         { provide: EventEmitter2, useValue: eventEmitter },
         { provide: StellarService, useValue: stellar },
         { provide: CoursesService, useValue: { findOne: jest.fn().mockResolvedValue(course) } },
-        { provide: PrerequisitesService, useValue: { enforcePrerequisites: jest.fn() } },
+        { provide: PrerequisitesService, useValue: prerequisites },
         {
           provide: CourseVersioningService,
           useValue: { listVersions: jest.fn().mockResolvedValue([{ versionNumber: 1 }]) },
@@ -179,5 +181,66 @@ describe('Enrollment flow (integration)', () => {
     await progress.record(userId, { courseId, progressPct: 100 }, stellarKey);
     expect(credentialRepo.rows).toHaveLength(1);
     expect(stellar.issueCredential).toHaveBeenCalledTimes(1);
+  });
+
+  describe('learning path prerequisites', () => {
+    const missingPrerequisites = [
+      { courseId: 'course-prereq-1', title: 'Stellar Basics' },
+      { courseId: 'course-prereq-2', title: 'Keys and Accounts' },
+    ];
+
+    const rejectWithMissingPrerequisites = () =>
+      prerequisites.enforcePrerequisites.mockRejectedValueOnce(
+        new UnprocessableEntityException({ missingPrerequisites })
+      );
+
+    it('returns 422 with the missing prerequisites when they are not completed', async () => {
+      rejectWithMissingPrerequisites();
+
+      const error = await enrollments.enroll(userId, courseId).catch((e) => e);
+
+      expect(error).toBeInstanceOf(UnprocessableEntityException);
+      expect(error.getStatus()).toBe(422);
+      expect(error.getResponse()).toMatchObject({ missingPrerequisites });
+      expect(prerequisites.enforcePrerequisites).toHaveBeenCalledWith(userId, courseId, {
+        override: false,
+      });
+      expect(enrollmentRepo.rows).toHaveLength(0);
+      expect(stellar.recordEnrollment).not.toHaveBeenCalled();
+      expect(eventEmitter.emit).not.toHaveBeenCalledWith(
+        'enrollment.created',
+        expect.anything()
+      );
+    });
+
+    it('allows enrollment once prerequisites are completed', async () => {
+      // Prerequisites satisfied: the check resolves without throwing.
+      const enrollment = await enrollments.enroll(userId, courseId);
+
+      expect(enrollment).toMatchObject({ userId, courseId });
+      expect(prerequisites.enforcePrerequisites).toHaveBeenCalledWith(userId, courseId, {
+        override: false,
+      });
+      expect(enrollmentRepo.rows).toHaveLength(1);
+    });
+
+    it('lets an admin bypass the prerequisite check with override=true', async () => {
+      // Even if the check would fail, the override must skip enforcement.
+      prerequisites.enforcePrerequisites.mockImplementationOnce(
+        async (_userId: string, _courseId: string, options?: { override?: boolean }) => {
+          if (!options?.override) {
+            throw new UnprocessableEntityException({ missingPrerequisites });
+          }
+        }
+      );
+
+      const enrollment = await enrollments.enroll(userId, courseId, { override: true });
+
+      expect(enrollment).toMatchObject({ userId, courseId });
+      expect(prerequisites.enforcePrerequisites).toHaveBeenCalledWith(userId, courseId, {
+        override: true,
+      });
+      expect(enrollmentRepo.rows).toHaveLength(1);
+    });
   });
 });

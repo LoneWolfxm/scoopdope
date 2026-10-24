@@ -3,12 +3,47 @@ name: Release
 on:
   push:
     branches: [main]
+  pull_request:
+    paths:
+      - 'packages/types/**'
 
 permissions:
   contents: write
   pull-requests: write
 
 jobs:
+  types-version-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changes under packages/types
+        id: changed
+        run: |
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          if git diff --quiet "origin/${{ github.base_ref }}...HEAD" -- packages/types; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fail if types changed without a version bump
+        if: steps.changed.outputs.changed == 'true'
+        run: |
+          BASE_VERSION=$(git show "origin/${{ github.base_ref }}:packages/types/package.json" | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")
+          HEAD_VERSION=$(node -p "require('./packages/types/package.json').version")
+          echo "Base version: $BASE_VERSION"
+          echo "Head version: $HEAD_VERSION"
+          if [ "$BASE_VERSION" = "$HEAD_VERSION" ]; then
+            echo "::error::packages/types changed but its version was not bumped ($HEAD_VERSION). Bump the version in packages/types/package.json (release-please will do this via a PR) and update packages/types/CHANGELOG.md."
+            exit 1
+          fi
+
   release-please:
     runs-on: ubuntu-latest
     outputs:

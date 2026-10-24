@@ -33,11 +33,17 @@ export class DownloadsController {
   @ApiOperation({ summary: 'Queue a lesson/course for offline download' })
   @ApiResponse({ status: 400, description: 'Bad request' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @ApiResponse({ status: 403, description: 'Forbidden' })
+  @ApiResponse({
+    status: 403,
+    description: 'Forbidden - user is not enrolled in the course and is not an admin/instructor',
+  })
   @ApiResponse({ status: 404, description: 'Not found' })
   @ApiResponse({ status: 429, description: 'Too many requests' })
   @ApiResponse({ status: 500, description: 'Internal server error' })
-  queue(@Req() req: Request & { user: { id: string } }, @Body() dto: QueueDownloadDto) {
+  queue(
+    @Req() req: Request & { user: { id: string; role?: string } },
+    @Body() dto: QueueDownloadDto,
+  ) {
     return this.service.queueDownload(
       req.user.id,
       dto.courseId,
@@ -45,6 +51,7 @@ export class DownloadsController {
       dto.lessonTitle,
       dto.fileUrl,
       dto.fileSizeBytes,
+      req.user.role,
     );
   }
 

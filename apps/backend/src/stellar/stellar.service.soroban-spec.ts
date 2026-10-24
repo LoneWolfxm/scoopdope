@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { CacheModule } from '@nestjs/cache-manager';
 import { StellarService } from './stellar.service';
+import { MetricsService } from '../metrics/metrics.service';
 import { execSync } from 'child_process';
 import * as path from 'path';
 
@@ -63,6 +64,13 @@ describe('StellarService - Soroban Testnet (Integration)', () => {
               };
               return config[key];
             },
+          },
+        },
+        {
+          provide: MetricsService,
+          useValue: {
+            observeStellarRpcLatency: jest.fn(),
+            incrementStellarRpcTimeout: jest.fn(),
           },
         },
       ],

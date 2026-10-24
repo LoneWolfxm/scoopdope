@@ -1,4 +1,4 @@
-import { MigrationInterface, QueryRunner, TableColumn, TableIndex } from 'typeorm';
+import { MigrationInterface, QueryRunner, TableColumn } from 'typeorm';
 
 export class AddLessonTimeTracking1750100000000 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
@@ -86,5 +86,36 @@ export class AddLessonTimeTracking1750100000000 implements MigrationInterface {
     await queryRunner.query(`DROP TABLE IF EXISTS lesson_time_stats CASCADE;`);
     await queryRunner.query(`DROP TABLE IF EXISTS study_sessions CASCADE;`);
     await queryRunner.dropColumn('lessons', 'timeSpentSeconds');
+  }
+}
+
+export class AddLessonWatchTracking1750200000000 implements MigrationInterface {
+  public async up(queryRunner: QueryRunner): Promise<void> {
+    // Total unique seconds watched in this session (rewatched segments excluded)
+    await queryRunner.addColumn(
+      'study_sessions',
+      new TableColumn({
+        name: 'watchedSeconds',
+        type: 'int',
+        default: 0,
+        comment: 'Unique seconds watched in this session, excluding rewatched segments',
+      }),
+    );
+
+    // Furthest playback position reached, used to resume playback
+    await queryRunner.addColumn(
+      'study_sessions',
+      new TableColumn({
+        name: 'furthestTimestamp',
+        type: 'int',
+        isNullable: true,
+        comment: 'Furthest playback position (seconds) reached in this session',
+      }),
+    );
+  }
+
+  public async down(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.dropColumn('study_sessions', 'furthestTimestamp');
+    await queryRunner.dropColumn('study_sessions', 'watchedSeconds');
   }
 }

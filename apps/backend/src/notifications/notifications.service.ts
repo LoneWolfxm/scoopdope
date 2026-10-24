@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, Inject, forwardRef, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Notification, NotificationType } from './notification.entity';
@@ -8,6 +8,8 @@ import { User, UserRole } from '../users/user.entity';
 import { PushNotificationsService } from './push-notifications.service';
 
 const NOTIFICATION_CENTER_LIMIT = 20;
+const EMAIL_IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60;
+const EMAIL_IDEMPOTENCY_PREFIX = 'notifications:email:sent:';
 
 export interface NotificationPreferences {
   pushEnabled: boolean;
@@ -37,6 +39,8 @@ export interface PaginatedNotifications {
 
 @Injectable()
 export class NotificationsService {
+  private readonly logger = new Logger(NotificationsService.name);
+
   constructor(
     @InjectRepository(Notification) private repo: Repository<Notification>,
     @InjectRepository(User) private userRepo: Repository<User>,
@@ -263,44 +267,6 @@ export class NotificationsService {
 
   async markAsRead(id: string, userId: string): Promise<Notification> {
     const notification = await this.repo.findOne({ where: { id } });
-    if (!notification) throw new NotFoundException('Notification not found');
-    if (notification.userId !== userId) throw new ForbiddenException('Access denied');
+    if (!notification) throw ne
 
-    notification.isRead = true;
-    return this.repo.save(notification);
-  }
-
-  async markAllAsRead(userId: string) {
-    await this.repo.update({ userId, isRead: false }, { isRead: true });
-    return { success: true };
-  }
-
-  // ── Event-driven helpers ─────────────────────────────────────────────────
-
-  async onEnrollmentCreated(userId: string, courseName: string) {
-    return this.create(
-      userId,
-      NotificationType.ENROLLMENT,
-      `You have been enrolled in ${courseName}`,
-      'Enrollment Confirmed',
-    );
-  }
-
-  async onCredentialIssued(userId: string, courseName: string) {
-    return this.create(
-      userId,
-      NotificationType.CREDENTIAL_ISSUED,
-      `Your credential for ${courseName} has been issued!`,
-      'Credential Issued',
-    );
-  }
-
-  async onProgressCompleted(userId: string, courseName: string) {
-    return this.create(
-      userId,
-      NotificationType.COMPLETION,
-      `Congratulations! You have completed ${courseName}`,
-      'Course Completed',
-    );
-  }
-}
+/* … truncated 1152 chars — edit only what you need near the top … */

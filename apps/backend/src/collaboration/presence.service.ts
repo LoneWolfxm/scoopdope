@@ -23,6 +23,9 @@ export interface CourseUpdateResult {
  * multi-instance deployment this would be backed by Redis, but the API stays
  * the same so the gateway does not change.
  */
+/** Participants with no heartbeat for this long are treated as disconnected. */
+export const PRESENCE_TTL_MS = 60_000;
+
 @Injectable()
 export class PresenceService {
   private readonly logger = new Logger(PresenceService.name);
@@ -70,6 +73,31 @@ export class PresenceService {
 
   isPresent(courseId: string, instructorId: string): boolean {
     return this.presence.get(courseId)?.has(instructorId) ?? false;
+  }
+
+  /**
+   * Remove participants whose last heartbeat is older than the TTL.
+   * Returns the removed entries grouped by course so the gateway can
+   * broadcast an updated participant list for each affected course.
+   */
+  sweepStale(ttlMs: number = PRESENCE_TTL_MS): Map<string, InstructorPresence[]> {
+    const now = Date.now();
+    const removed = new Map<string, InstructorPresence[]>();
+    for (const [courseId, courseMap] of this.presence) {
+      for (const [instructorId, entry] of courseMap) {
+        if (now - entry.lastSeenAt > ttlMs) {
+          courseMap.delete(instructorId);
+          const list = removed.get(courseId) ?? [];
+          list.push(entry);
+          removed.set(courseId, list);
+          this.logger.log(
+            `instructor ${instructorId} timed out in course ${courseId} (last seen ${now - entry.lastSeenAt}ms ago)`,
+          );
+        }
+      }
+      if (courseMap.size === 0) this.presence.delete(courseId);
+    }
+    return removed;
   }
 
   /**

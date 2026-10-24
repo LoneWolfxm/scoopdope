@@ -5,12 +5,51 @@ This directory contains Kubernetes manifests for deploying the Scoopdope backend
 ## Overview
 
 The Scoopdope backend is configured for production Kubernetes deployments with:
-- **Liveness Probe**: Detects if the process is alive (3 failures, 10-second intervals)
-- **Readiness Probe**: Detects if the service is ready to accept traffic (15-second initial delay)
+- **Liveness Probe**: Detects if the process is alive (3 failures, 10-second intervals, 5-second timeout)
+- **Readiness Probe**: Detects if the service is ready to accept traffic (15-second initial delay, 5-second timeout)
 - **Startup Probe**: Handles slow-starting applications (30 retries at 10-second intervals)
 - **Resource Limits**: Memory and CPU constraints to prevent resource exhaustion
 - **Pod Anti-Affinity**: Spreads pods across nodes for high availability
 - **Security Context**: Non-root user, read-only root filesystem, capability dropping
+
+## Probe Rationale
+
+### Why probes do not use plain HTTP
+
+The liveness and readiness probes deliberately avoid `httpGet` with the default
+`scheme: HTTP`. In production the service is expected to run behind (or with)
+TLS, and if TLS termination is moved inside the pod the plain-HTTP probe would
+start failing and cause spurious pod restarts. To keep the probes independent of
+the transport configuration, they are defined as `exec` probes that issue an
+HTTPS request to `https://localhost:3000/health/...` with certificate
+verification disabled (`-k`). This works whether TLS is terminated in-pod or by
+an ingress, and it never falls back to unencrypted HTTP in production.
+
+If you prefer `httpGet` probes, set `scheme: HTTPS` explicitly on every probe
+(`livenessProbe`, `readinessProbe`, and `startupProbe`) — never rely on the
+default HTTP scheme in production manifests.
+
+### Timeout and failure threshold choices
+
+- **`timeoutSeconds: 5`** — the health endpoints may touch the database and
+  Redis; 5 seconds gives them room to respond under load without masking a
+  genuinely hung process.
+- **`failureThreshold: 3`** — a pod is restarted only after three consecutive
+  failed liveness checks (≈30 seconds of sustained failure), which avoids
+  restart loops caused by transient blips.
+- **`periodSeconds: 10`** (liveness) and **`5`** (readiness) — frequent enough
+  to react quickly, infrequent enough to keep probe overhead negligible.
+- **`initialDelaySeconds` / startup probe** — the startup probe allows up to
+  300 seconds for slow initialization, so the liveness probe does not kill a
+  pod that is still booting.
+
+### Keep overlays consistent
+
+The base manifest and the **staging** and **production** overlays
+(`infra/kubernetes/overlays/*`) must define the same probe scheme, timeouts,
+and thresholds. When changing probe configuration, update the base manifest and
+both overlays in the same change so staging and production never diverge.
+=======
 
 ## Files
 
@@ -20,21 +59,22 @@ Main deployment configuration for the backend service.
 **Key Configuration:**
 - **Replicas**: 3 (configurable for your needs)
 - **Image**: `scoopdope/backend:latest` (update with your registry)
-- **Liveness Probe**:
-  - Endpoint: `GET /health/liveness`
+- **Liveness Probe** (exec, HTTPS — no plain HTTP in production):
+  - Command: `wget --no-verbose --tries=1 --spider --no-check-certificate https://localhost:3000/health/liveness`
   - Initial Delay: 30 seconds
   - Period: 10 seconds
   - Timeout: 5 seconds
   - Failure Threshold: 3
-- **Readiness Probe**:
-  - Endpoint: `GET /health/readiness`
+- **Readiness Probe** (exec, HTTPS):
+  - Command: `wget --no-verbose --tries=1 --spider --no-check-certificate https://localhost:3000/health/readiness`
   - Initial Delay: 15 seconds
   - Period: 5 seconds
-  - Timeout: 3 seconds
+  - Timeout: 5 seconds
   - Failure Threshold: 3
-- **Startup Probe**:
-  - Endpoint: `GET /health/startup`
+- **Startup Probe** (exec, HTTPS):
+  - Command: `wget --no-verbose --tries=1 --spider --no-check-certificate https://localhost:3000/health/startup`
   - Period: 10 seconds
+  - Timeout: 5 seconds
   - Failure Threshold: 30 (allows up to 300 seconds for startup)
 - **Resource Requests**:
   - Memory: 256Mi
@@ -287,10 +327,13 @@ kubectl top pods
 
 ### Liveness/Readiness Probe Failures
 ```bash
-# Check health endpoints manually
+# Check health endpoints manually (probes use HTTPS inside the pod)
 kubectl port-forward svc/scoopdope-backend 8080:80
-curl -v http://localhost:8080/health/liveness
-curl -v http://localhost:8080/health/readiness
+curl -vk https://localhost:8080/health/liveness
+curl -vk https://localhost:8080/health/readiness
+
+# Run the same command the exec probe uses
+kubectl exec <pod-name> -- wget --no-verbose --tries=1 --spider --no-check-certificate https://localhost:3000/health/liveness
 
 # Verify environment variables
 kubectl exec <pod-name> -- env | grep DATABASE

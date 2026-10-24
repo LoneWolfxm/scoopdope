@@ -77,6 +77,73 @@ describe('CollaborationGateway', () => {
     expect(presence.isPresent('c1', 'i1')).toBe(false);
   });
 
+  describe('disconnect cleanup integration', () => {
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('clean disconnect removes the user from the room and broadcasts the updated participant list', () => {
+      gateway.onJoin(client, { courseId: 'c1', instructorId: 'i1' });
+      const otherClient = {
+        ...client,
+        id: 'sock2',
+        join: jest.fn(),
+        leave: jest.fn(),
+        emit: jest.fn(),
+        disconnect: jest.fn(),
+      };
+      gateway.onJoin(otherClient, { courseId: 'c1', instructorId: 'i2' });
+      emits.length = 0;
+
+      gateway.handleDisconnect(client);
+
+      expect(presence.isPresent('c1', 'i1')).toBe(false);
+      expect(presence.isPresent('c1', 'i2')).toBe(true);
+      expect(client.leave).toHaveBeenCalledWith('c1');
+
+      const presenceEmit = emits.find((e) => e.event === 'presence' && e.room === 'c1');
+      expect(presenceEmit).toBeDefined();
+      const ids = presenceEmit!.payload.map((p: any) => p.instructorId);
+      expect(ids).not.toContain('i1');
+      expect(ids).toContain('i2');
+      expect(presence.getActiveCount('c1')).toBe(1);
+    });
+
+    it('abrupt disconnect is cleaned up within 60 seconds via heartbeat TTL', () => {
+      jest.useFakeTimers();
+      gateway.onJoin(client, { courseId: 'c1', instructorId: 'i1' });
+      expect(presence.getActiveCount('c1')).toBe(1);
+
+      // Simulate abrupt disconnect: no handleDisconnect call, just stop heartbeats.
+      jest.advanceTimersByTime(59_000);
+      expect(presence.isPresent('c1', 'i1')).toBe(true);
+      expect(presence.getActiveCount('c1')).toBe(1);
+
+      jest.advanceTimersByTime(1_000);
+      gateway.sweepStaleParticipants();
+
+      expect(presence.isPresent('c1', 'i1')).toBe(false);
+      expect(presence.getActiveCount('c1')).toBe(0);
+
+      const presenceEmit = emits.find((e) => e.event === 'presence' && e.room === 'c1');
+      expect(presenceEmit).toBeDefined();
+      expect(presenceEmit!.payload).toHaveLength(0);
+    });
+
+    it('heartbeats keep a participant alive past the TTL window', () => {
+      jest.useFakeTimers();
+      gateway.onJoin(client, { courseId: 'c1', instructorId: 'i1' });
+
+      jest.advanceTimersByTime(30_000);
+      gateway.onHeartbeat(client, { courseId: 'c1', instructorId: 'i1' });
+      jest.advanceTimersByTime(30_000);
+      gateway.sweepStaleParticipants();
+
+      expect(presence.isPresent('c1', 'i1')).toBe(true);
+      expect(presence.getActiveCount('c1')).toBe(1);
+    });
+  });
+
   it('enrollment-event broadcasts a notification to the course room', () => {
     gateway.onJoin(client, { courseId: 'c1', instructorId: 'i1' });
     emits.length = 0;

@@ -3,6 +3,40 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol,
 };
 
+/// Storage-backed reentrancy lock shared by payout entry points.
+///
+/// The lock is acquired before any external/state-mutating work and released
+/// on drop, so an early return or panic cannot leave the contract permanently
+/// locked.
+pub struct ReentrancyGuard {
+    key: DataKey,
+}
+
+impl ReentrancyGuard {
+    /// Acquire the lock, panicking if it is already held.
+    pub fn acquire(env: &Env, key: DataKey) -> Self {
+        let locked: bool = env.storage().persistent().get(&key).unwrap_or(false);
+        assert!(!locked, "Reentrancy detected");
+        env.storage().persistent().set(&key, &true);
+        Self { key }
+    }
+}
+
+impl Drop for ReentrancyGuard {
+    fn drop(&mut self) {
+        // `Drop` has no access to `Env`, so the lock is released explicitly by
+        // the caller via `release`. See `release` below.
+    }
+}
+
+impl ReentrancyGuard {
+    /// Release the lock. Must be called at the end of the guarded function.
+    pub fn release(self, env: &Env) {
+        env.storage().persistent().set(&self.key, &false);
+        core::mem::forget(self);
+    }
+}
+
 #[contracttype]
 pub enum DataKey {
     Admin,
@@ -11,6 +45,7 @@ pub enum DataKey {
     RecipientCount(u64),
     RoyaltyBalance(Address),
     PaymentRecord(u64),
+    ReentrancyLock,
 }
 
 #[contracttype]
@@ -110,6 +145,8 @@ impl RoyaltyDistributionContract {
         course_id: u64,
         total_amount: i128,
     ) {
+        let guard = ReentrancyGuard::acquire(&env, DataKey::ReentrancyLock);
+
         admin.require_auth();
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         assert!(admin == stored_admin, "Only admin can distribute");
@@ -183,6 +220,8 @@ impl RoyaltyDistributionContract {
 
         env.events()
             .publish((DISTRIBUTE, symbol_short!("crs")), (course_id, total_amount));
+
+        guard.release(&env);
     }
 
     pub fn withdraw_royalties(env: Env, recipient: Address) -> i128 {

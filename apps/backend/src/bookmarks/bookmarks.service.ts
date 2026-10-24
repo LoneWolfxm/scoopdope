@@ -75,6 +75,40 @@ export class BookmarksService {
   }
 
   /**
+   * Get a paginated list of bookmarks for a user with lesson details,
+   * ordered newest first. `limit` is capped at 100 and `page` is clamped
+   * to a minimum of 1.
+   */
+  async getUserBookmarksPaginated(
+    userId: string,
+    page = 1,
+    limit = 20,
+  ): Promise<{
+    data: UserBookmark[];
+    total: number;
+    page: number;
+    lastPage: number;
+  }> {
+    const safePage = Math.max(1, Math.floor(page) || 1);
+    const safeLimit = Math.min(100, Math.max(1, Math.floor(limit) || 20));
+
+    const [data, total] = await this.bookmarkRepo.findAndCount({
+      where: { userId },
+      relations: ['lesson', 'lesson.module'],
+      order: { createdAt: 'DESC' },
+      skip: (safePage - 1) * safeLimit,
+      take: safeLimit,
+    });
+
+    return {
+      data,
+      total,
+      page: safePage,
+      lastPage: Math.max(1, Math.ceil(total / safeLimit)),
+    };
+  }
+
+  /**
    * Check if a specific lesson is bookmarked by the user.
    */
   async isBookmarked(userId: string, lessonId: string): Promise<boolean> {

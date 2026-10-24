@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  Patch,
   Post,
   Query,
   Request,
@@ -12,6 +13,8 @@ import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagg
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CreatePostDto } from './dto/create-post.dto';
 import { CreateReplyDto } from './dto/create-reply.dto';
+import { CreateForumCategoryDto } from './dto/create-forum-category.dto';
+import { UpdateForumCategoryDto } from './dto/update-forum-category.dto';
 import { ForumsService } from './forums.service';
 import { VoteDirection } from './forum-vote.entity';
 import { IsIn } from 'class-validator';
@@ -127,6 +130,42 @@ export class ForumsController {
     @Body() dto: CreateReplyDto
   ) {
     return this.forumsService.createReply(postId, req.user.id, req.user.role, dto);
+  }
+
+  @Post('forums/categories')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Create a forum category' })
+  @ApiResponse({ status: 400, description: 'Bad request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  @ApiResponse({ status: 429, description: 'Too many requests' })
+  @ApiResponse({ status: 500, description: 'Internal server error' })
+  @ApiResponse({ status: 201, description: 'Forum category created successfully' })
+  createCategory(
+    @Request() req: { user: { id: string; role: string } },
+    @Body() dto: CreateForumCategoryDto
+  ) {
+    return this.forumsService.createCategory(req.user.id, req.user.role, dto);
+  }
+
+  @Patch('forums/categories/:id')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Update a forum category' })
+  @ApiResponse({ status: 400, description: 'Bad request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  @ApiResponse({ status: 429, description: 'Too many requests' })
+  @ApiResponse({ status: 500, description: 'Internal server error' })
+  @ApiResponse({ status: 200, description: 'Forum category updated successfully' })
+  updateCategory(
+    @Param('id') categoryId: string,
+    @Request() req: { user: { id: string; role: string } },
+    @Body() dto: UpdateForumCategoryDto
+  ) {
+    return this.forumsService.updateCategory(categoryId, req.user.id, req.user.role, dto);
   }
 
   @Post('posts/:id/vote')

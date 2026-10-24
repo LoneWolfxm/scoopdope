@@ -134,6 +134,17 @@ const handleClose = () => {
 | Dropdown menu | `Escape` | Closes the menu, returns focus to trigger |
 | Select | `Arrow Up/Down` | Changes selected option |
 | Navbar hamburger | `Enter` / `Space` | Toggles mobile menu open/closed |
+| Video player | `Space` | Toggles play/pause |
+| Video player | `Arrow Left` / `Arrow Right` | Seeks backward/forward 5 seconds |
+| Video player | `M` | Toggles mute |
+| Video player | `F` | Toggles fullscreen |
+
+### Video Player Keyboard Support
+
+The course video player container is focusable (`tabIndex={0}`) and handles the shortcuts above via `onKeyDown`. It also renders a visible keyboard shortcut legend so users can discover the controls. The player is covered by:
+
+- An axe audit (unit test and/or Playwright scan) that must report zero critical violations on the player.
+- A Playwright keyboard navigation test (`apps/frontend/e2e/`) verifying play/pause with `Space` and 5-second seeking with the arrow keys.
 
 ---
 

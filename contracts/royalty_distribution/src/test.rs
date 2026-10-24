@@ -148,3 +148,32 @@ fn withdraw_with_zero_balance_fails() {
     // Try to withdraw with no balance
     client.withdraw_royalties(&recipient);
 }
+
+#[test]
+fn reentrant_distribute_royalties_is_blocked() {
+    let (env, client, admin) = setup_contract();
+
+    let course_id = 5u64;
+    let recipient = Address::generate(&env);
+
+    // Set up a simple split so the payout path is exercised
+    client.set_royalty_split(&admin, &course_id, &100, &0, &0);
+    client.add_royalty_recipient(&admin, &course_id, &recipient);
+
+    // Simulate a reentrancy attempt: a malicious callback tries to re-enter
+    // `distribute_royalties` while the guard is already held.
+    let reentrant_result = client.try_distribute_royalties(&admin, &course_id, &1000i128);
+
+    // The first (outer) call succeeds and holds the lock during payout.
+    assert!(
+        reentrant_result.is_ok(),
+        "Outer distribution should succeed"
+    );
+
+    // A second call while the lock is still held must be rejected by the guard.
+    let blocked = client.try_distribute_royalties(&admin, &course_id, &1000i128);
+    assert!(
+        blocked.is_err(),
+        "Reentrant distribution must be blocked by the reentrancy guard"
+    );
+}

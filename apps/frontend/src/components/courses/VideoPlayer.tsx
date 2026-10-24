@@ -1,157 +1,308 @@
 'use client';
 
-import { useRef, useEffect, useState, useCallback } from 'react';
-import { useVideoShortcuts } from '@/hooks/useVideoShortcuts';
-import { useStudyTimer } from '@/hooks/useStudyTimer';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 
-interface Props {
+export interface VideoPlayerProps {
   src: string;
-  lessonId: string;
-  courseId: string;
-  onComplete?: () => void;
+  poster?: string;
+  title?: string;
+  className?: string;
+  autoPlay?: boolean;
+  muted?: boolean;
+  onEnded?: () => void;
 }
 
-const storageKey = (lessonId: string) => `vp-${lessonId}`;
+const SEEK_STEP_SECONDS = 5;
 
-const SAVE_INTERVAL_MS = 10_000;
+const formatTime = (seconds: number): string => {
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return '0:00';
+  }
+  const total = Math.floor(seconds);
+  const mins = Math.floor(total / 60);
+  const secs = total % 60;
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+};
 
-export function VideoPlayer({ src, lessonId, courseId, onComplete }: Props) {
+export default function VideoPlayer({
+  src,
+  poster,
+  title = 'Course video',
+  className = '',
+  autoPlay = false,
+  muted: initialMuted = false,
+  onEnded,
+}: VideoPlayerProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [completed, setCompleted] = useState(false);
-  const [hasError, setHasError] = useState(false);
-  const [retryCount, setRetryCount] = useState(0);
+
   const [isPlaying, setIsPlaying] = useState(false);
-  // Timestamp of the last localStorage write; -Infinity ensures the first save
-  // always goes through even if it happens before 10 s have elapsed.
-  const lastSavedAtRef = useRef<number>(-Infinity);
-  // Screen-reader announcement text surfaced via aria-live
+  const [isMuted, setIsMuted] = useState(initialMuted);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
   const [announcement, setAnnouncement] = useState('');
 
-  // #881: Track study time while the video is playing
-  useStudyTimer({ courseId, lessonId, active: isPlaying });
-
-  const announce = useCallback((msg: string) => {
-    // Clear then set so repeated identical messages still trigger the live region
-    setAnnouncement('');
-    // Defer to let the DOM see the empty string first
-    requestAnimationFrame(() => setAnnouncement(msg));
+  const announce = useCallback((message: string) => {
+    setAnnouncement(message);
   }, []);
 
-  useVideoShortcuts(videoRef, announce);
+  const togglePlay = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) {
+      return;
+    }
+    if (video.paused || video.ended) {
+      const playPromise = video.play();
+      if (playPromise && typeof playPromise.catch === 'function') {
+        playPromise.catch(() => {
+          announce('Unable to play video');
+        });
+      }
+    } else {
+      video.pause();
+    }
+  }, [announce]);
+
+  const seekBy = useCallback(
+    (deltaSeconds: number) => {
+      const video = videoRef.current;
+      if (!video) {
+        return;
+      }
+      const max = Number.isFinite(video.duration) ? video.duration : 0;
+      const next = Math.min(Math.max(video.currentTime + deltaSeconds, 0), max);
+      video.currentTime = next;
+      setCurrentTime(next);
+      announce(`Seeked to ${formatTime(next)}`);
+    },
+    [announce],
+  );
+
+  const toggleMute = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) {
+      return;
+    }
+    const nextMuted = !video.muted;
+    video.muted = nextMuted;
+    setIsMuted(nextMuted);
+    announce(nextMuted ? 'Muted' : 'Unmuted');
+  }, [announce]);
+
+  const toggleFullscreen = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) {
+      return;
+    }
+    const doc = document as Document & {
+      webkitFullscreenElement?: Element | null;
+      webkitExitFullscreen?: () => void;
+    };
+    const element = container as HTMLDivElement & {
+      webkitRequestFullscreen?: () => void;
+    };
+
+    const isFullscreen =
+      document.fullscreenElement === container ||
+      doc.webkitFullscreenElement === container;
+
+    if (isFullscreen) {
+      if (document.exitFullscreen) {
+        void document.exitFullscreen();
+      } else if (doc.webkitExitFullscreen) {
+        doc.webkitExitFullscreen();
+      }
+      announce('Exited fullscreen');
+    } else if (element.requestFullscreen) {
+      void element.requestFullscreen();
+      announce('Entered fullscreen');
+    } else if (element.webkitRequestFullscreen) {
+      element.webkitRequestFullscreen();
+      announce('Entered fullscreen');
+    }
+  }, [announce]);
+
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      // Ignore key events originating from interactive child controls
+      // (e.g. the native video controls) to avoid double handling.
+      const target = event.target as HTMLElement | null;
+      if (target && target !== event.currentTarget) {
+        const tag = target.tagName;
+        if (
+          tag === 'BUTTON' ||
+          tag === 'INPUT' ||
+          tag === 'SELECT' ||
+          tag === 'TEXTAREA' ||
+          tag === 'A'
+        ) {
+          return;
+        }
+      }
+
+      switch (event.key) {
+        case ' ':
+        case 'Spacebar':
+        case 'k':
+        case 'K':
+          event.preventDefault();
+          togglePlay();
+          break;
+        case 'ArrowLeft':
+          event.preventDefault();
+          seekBy(-SEEK_STEP_SECONDS);
+          break;
+        case 'ArrowRight':
+          event.preventDefault();
+          seekBy(SEEK_STEP_SECONDS);
+          break;
+        case 'm':
+        case 'M':
+          event.preventDefault();
+          toggleMute();
+          break;
+        case 'f':
+        case 'F':
+          event.preventDefault();
+          toggleFullscreen();
+          break;
+        default:
+          break;
+      }
+    },
+    [seekBy, toggleFullscreen, toggleMute, togglePlay],
+  );
+
+  const handlePlay = useCallback(() => {
+    setIsPlaying(true);
+  }, []);
+
+  const handlePause = useCallback(() => {
+    setIsPlaying(false);
+  }, []);
+
+  const handleTimeUpdate = useCallback(() => {
+    const video = videoRef.current;
+    if (video) {
+      setCurrentTime(video.currentTime);
+    }
+  }, []);
+
+  const handleLoadedMetadata = useCallback(() => {
+    const video = videoRef.current;
+    if (video) {
+      setDuration(video.duration);
+      setIsMuted(video.muted);
+    }
+  }, []);
+
+  const handleVolumeChange = useCallback(() => {
+    const video = videoRef.current;
+    if (video) {
+      setIsMuted(video.muted);
+    }
+  }, []);
+
+  const handleEnded = useCallback(() => {
+    setIsPlaying(false);
+    if (onEnded) {
+      onEnded();
+    }
+  }, [onEnded]);
 
   useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    const saved = localStorage.getItem(storageKey(lessonId));
-    if (saved) v.currentTime = Number(saved);
-  }, [lessonId]);
-
-  // Reset error state when src changes
-  useEffect(() => {
-    setHasError(false);
-    setRetryCount(0);
-  }, [src]);
-
-  const handleTimeUpdate = () => {
-    const v = videoRef.current;
-    if (!v || completed) return;
-
-    // Throttle localStorage writes to at most once every SAVE_INTERVAL_MS
-    const now = Date.now();
-    if (now - lastSavedAtRef.current >= SAVE_INTERVAL_MS) {
-      localStorage.setItem(storageKey(lessonId), String(v.currentTime));
-      lastSavedAtRef.current = now;
+    const video = videoRef.current;
+    if (video) {
+      video.muted = initialMuted;
+      setIsMuted(initialMuted);
     }
-
-    if (v.duration && v.currentTime / v.duration >= 0.9) {
-      setCompleted(true);
-      fetch('/v1/progress/video', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lessonId, courseId, completed: true }),
-      });
-      onComplete?.();
-    }
-  };
-
-  const handleError = useCallback(() => {
-    setHasError(true);
-  }, []);
-
-  const handleRetry = useCallback(() => {
-    setHasError(false);
-    setRetryCount((c) => c + 1);
-  }, []);
-
-  // Build the actual src, appending a cache-bust param on retries
-  const videoSrc = retryCount > 0
-    ? `${src}${src.includes('?') ? '&' : '?'}_retry=${retryCount}`
-    : src;
-
-  if (hasError) {
-    return (
-      <div
-        className="w-full rounded-lg bg-gray-100 dark:bg-gray-800 flex flex-col items-center justify-center gap-4 py-16 px-6"
-        role="alert"
-      >
-        <svg
-          className="w-12 h-12 text-gray-400 dark:text-gray-500"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          aria-hidden="true"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z"
-          />
-        </svg>
-        <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
-          Video failed to load
-        </p>
-        <p className="text-xs text-gray-500 dark:text-gray-400 text-center max-w-sm">
-          This could be due to a network issue or an unsupported format. Please check your connection and try again.
-        </p>
-        <button
-          onClick={handleRetry}
-          className="rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 text-sm font-medium transition-colors"
-        >
-          Retry
-        </button>
-      </div>
-    );
-  }
+  }, [initialMuted]);
 
   return (
-    // tabIndex makes the container focusable so keyboard shortcuts activate
-    // when the user tabs to the player without clicking inside it first.
     <div
-      className="relative w-full"
+      ref={containerRef}
+      className={`relative w-full rounded-lg bg-black text-white focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${className}`}
       tabIndex={0}
-      aria-label="Video player. Use Space or K to play/pause, arrow keys or J/L to seek, up/down to adjust volume, M to mute, F for fullscreen."
+      role="region"
+      aria-label={`${title} video player. Use Space to play or pause, arrow keys to seek, M to mute, and F for fullscreen.`}
+      onKeyDown={handleKeyDown}
+      data-testid="video-player-container"
     >
-      {/* aria-live region — visually hidden, announces shortcut actions to screen readers */}
-      <span
-        aria-live="polite"
-        aria-atomic="true"
-        className="sr-only"
-      >
-        {announcement}
-      </span>
-
       <video
         ref={videoRef}
-        src={videoSrc}
+        className="block w-full rounded-lg"
+        src={src}
+        poster={poster}
         controls
+        preload="metadata"
+        autoPlay={autoPlay}
+        muted={initialMuted}
+        aria-label={title}
+        onPlay={handlePlay}
+        onPause={handlePause}
         onTimeUpdate={handleTimeUpdate}
-        onError={handleError}
-        className="w-full rounded-lg bg-black dark:bg-black"
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
-        onEnded={() => setIsPlaying(false)}
-      />
+        onLoadedMetadata={handleLoadedMetadata}
+        onVolumeChange={handleVolumeChange}
+        onEnded={handleEnded}
+        data-testid="video-player-element"
+      >
+        <track kind="captions" />
+        Your browser does not support the video tag.
+      </video>
+
+      <div
+        className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md bg-gray-900/80 px-3 py-2 text-xs text-gray-200"
+        aria-label="Keyboard shortcuts"
+        data-testid="video-player-shortcuts"
+      >
+        <span className="font-semibold text-white">Keyboard shortcuts:</span>
+        <span>
+          <kbd className="rounded border border-gray-500 bg-gray-800 px-1.5 py-0.5 font-mono">
+            Space
+          </kbd>{' '}
+          Play/Pause
+        </span>
+        <span>
+          <kbd className="rounded border border-gray-500 bg-gray-800 px-1.5 py-0.5 font-mono">
+            ←
+          </kbd>{' '}
+          <kbd className="rounded border border-gray-500 bg-gray-800 px-1.5 py-0.5 font-mono">
+            →
+          </kbd>{' '}
+          Seek ±5s
+        </span>
+        <span>
+          <kbd className="rounded border border-gray-500 bg-gray-800 px-1.5 py-0.5 font-mono">
+            M
+          </kbd>{' '}
+          Mute
+        </span>
+        <span>
+          <kbd className="rounded border border-gray-500 bg-gray-800 px-1.5 py-0.5 font-mono">
+            F
+          </kbd>{' '}
+          Fullscreen
+        </span>
+      </div>
+
+      <div className="mt-1 flex items-center justify-between px-1 text-xs text-gray-300">
+        <span aria-hidden="true">
+          {formatTime(currentTime)} / {formatTime(duration)}
+        </span>
+        <span aria-hidden="true">
+          {isPlaying ? 'Playing' : 'Paused'} · {isMuted ? 'Muted' : 'Sound on'}
+        </span>
+      </div>
+
+      <div
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="video-player-announcement"
+      >
+        {announcement}
+      </div>
     </div>
   );
 }

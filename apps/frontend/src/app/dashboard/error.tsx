@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import * as Sentry from '@sentry/nextjs';
+import { useUser } from '@/hooks/useUser';
 import { Button } from '@/components/ui/Button';
 
 export default function DashboardError({
@@ -11,15 +12,19 @@ export default function DashboardError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  const { user } = useUser();
+
   useEffect(() => {
+    if (user?.id) {
+      Sentry.setUser({ id: user.id });
+    }
     Sentry.captureException(error, {
-      contexts: {
-        react: {
-          componentStack: error.stack ?? 'No stack trace available',
-        },
+      extra: {
+        componentStack: error.stack ?? 'No stack trace available',
+        digest: error.digest,
       },
     });
-  }, [error]);
+  }, [error, user?.id]);
 
   const reportIssue = () => {
     const subject = encodeURIComponent('Dashboard Error Report from Scoopdope App');

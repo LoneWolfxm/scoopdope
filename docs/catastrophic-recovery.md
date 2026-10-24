@@ -215,3 +215,114 @@ To reduce rollback frequency:
 - [ ] Verify the contract hash with a previous successful deployment to catch bytecode regressions.
 - [ ] Have a mainnet rollback plan documented and tested on testnet.
 - [ ] Set up alerts for failed contract operations (initialize, update, etc.).
+
+## Stellar Key Compromise
+
+The `STELLAR_SECRET_KEY` is used for credential issuance and reward minting. If it is exposed, an attacker can drain the treasury, mint unlimited rewards, and issue fraudulent credentials. Treat any suspected exposure as a **SEV-1** incident and follow this runbook immediately.
+
+### Immediate response (first 15 minutes)
+
+1. **Declare the incident**: page the on-call engineer and the Security Lead via the incident channel. Open an incident ticket and start a timeline log.
+2. **Contain the damage**:
+   - Pause the token contract (see [Freezing the token contract](#freezing-the-token-contract)) to stop further mints and transfers.
+   - Revoke the compromised key from any CI/CD secret stores and rotate it (see [Key rotation procedure](#key-rotation-procedure)).
+   - Disable any automated jobs (reward minting, credential issuance) that use the key.
+3. **Preserve evidence**: do not delete logs. Export backend logs, Stellar Horizon transaction history, and secret-manager audit logs for the compromised key.
+4. **Assess exposure**: determine how the key leaked (committed to git, leaked in logs, compromised host, third-party breach) and whether other secrets are affected.
+5. **Notify**: inform the Security Lead and platform owner; prepare user communications (see [User notification](#user-notification)).
+
+### Key rotation procedure
+
+Rotate the key in every environment (local, staging, production). Never reuse the compromised key.
+
+1. **Generate a new keypair**:
+   ```bash
+   stellar keys generate scoopdope-issuer-$(date +%Y%m%d) --network mainnet
+   stellar keys address scoopdope-issuer-$(date +%Y%m%d)
+   # Output: G... (new public key)
+   ```
+2. **Fund the new account** with enough XLM for transaction fees and reserves:
+   ```bash
+   stellar account fund <NEW_PUBLIC_KEY>   # testnet only
+   # mainnet: transfer XLM from the treasury/ops account
+   ```
+3. **Transfer required roles**: if the old key held admin/issuer roles on the token or credential contracts, grant those roles to the new public key (e.g. `set_admin`, `add_minter`) and then remove the old key's roles.
+4. **Update secrets in the secret manager** (never in plaintext files or git):
+   ```bash
+   # Example using the platform secret manager CLI
+   secret-manager set STELLAR_SECRET_KEY --env production --value "<NEW_SECRET>"
+   secret-manager set STELLAR_SECRET_KEY --env staging --value "<NEW_SECRET>"
+   ```
+   Update `STELLAR_PUBLIC_KEY` alongside it so services validate against the new key.
+5. **Rolling deploy without downtime**:
+   - Deploy the new secret to one instance at a time (rolling update), waiting for health checks to pass before continuing.
+   - Keep the old key valid only until all instances report the new public key; then revoke it.
+   ```bash
+   docker compose up -d --no-deps --scale backend=2 backend   # rolling restart
+   docker compose logs -f backend | grep -i "stellar.*key"
+   # Expected: services log the new public key and pass health checks
+   ```
+6. **Verify**: confirm new mints/issuances are signed by the new key and the old key can no longer sign.
+7. **Unpause** the token contract once the new key is live and verified (see below).
+
+### Freezing the token contract
+
+The token contract implements the shared contract's pause mechanism. Pausing blocks mints, transfers, and reward issuance while leaving read-only queries available.
+
+1. **Pause** (requires the pauser/admin role):
+   ```bash
+   stellar contract invoke \
+     --id <TOKEN_CONTRACT_ID> \
+     --source-account <ADMIN_SECRET_KEY> \
+     --network mainnet \
+     -- pause
+   ```
+2. **Verify paused state**:
+   ```bash
+   stellar contract invoke --id <TOKEN_CONTRACT_ID> --network mainnet -- is_paused
+   # Expected: true
+   ```
+3. **Unpause** after the incident is resolved and the new key is verified:
+   ```bash
+   stellar contract invoke \
+     --id <TOKEN_CONTRACT_ID> \
+     --source-account <ADMIN_SECRET_KEY> \
+     --network mainnet \
+     -- unpause
+   ```
+4. **Test the pause mechanism** on testnet before relying on it in production, and re-test after every contract upgrade.
+
+### On-chain damage assessment
+
+After containment, quantify what the attacker did using Horizon and contract queries:
+
+```bash
+# Treasury balance of the compromised key
+stellar account info <COMPROMISED_PUBLIC_KEY>
+
+# Recent transactions signed by the compromised key (last 24h)
+curl "https://horizon.stellar.org/accounts/<COMPROMISED_PUBLIC_KEY>/transactions?order=desc&limit=200"
+
+# Token balances for affected accounts
+stellar contract invoke --id <TOKEN_CONTRACT_ID> --network mainnet -- balance --id <ACCOUNT>
+
+# Total supply (detect unauthorized mints)
+stellar contract invoke --id <TOKEN_CONTRACT_ID> --network mainnet -- total_supply
+```
+
+Record: unauthorized mints, transfers out of the treasury, fraudulent credentials issued, and the time window of attacker activity. Attach findings to the incident ticket.
+
+### User notification
+
+1. **Internal**: notify support, community managers, and leadership within 1 hour of confirmation.
+2. **Affected users**: notify users whose credentials or rewards were affected, describing what happened, what was done, and any action required (e.g. re-issuance of credentials).
+3. **Public**: publish a status-page update and, if funds were lost, a public post-mortem after remediation.
+4. **Regulatory**: consult legal on any disclosure obligations.
+
+### Quarterly key compromise drill
+
+- **Owner**: Security Lead (backup: Platform On-Call Lead).
+- **Schedule**: first week of each quarter (Jan, Apr, Jul, Oct); results reviewed in the following security sync.
+- **Scope**: simulate key exposure in staging — pause the token contract, rotate the key, rolling deploy, verify, unpause, and run the damage-assessment queries.
+- **Output**: drill report with timings against RTO, gaps found, and runbook updates. Track action items to completion.
+=======

@@ -7,7 +7,7 @@ import { HealthService } from './health.service';
 import {
   DiskHealthIndicator,
   ElasticsearchHealthIndicator,
-  StellarSorobanHealthIndicator,
+  StellarHealthIndicator,
 } from './indicators';
 
 @Module({
@@ -24,7 +24,7 @@ import {
     HealthService,
     DiskHealthIndicator,
     ElasticsearchHealthIndicator,
-    StellarSorobanHealthIndicator,
+    StellarHealthIndicator,
   ],
   exports: [HealthService],
 })

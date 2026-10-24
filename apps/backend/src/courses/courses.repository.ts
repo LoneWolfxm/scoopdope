@@ -10,13 +10,17 @@ export class CoursesRepository {
     private readonly repository: Repository<Course>,
   ) {}
 
-  async findAll(search?: string): Promise<Course[]> {
+  async findAll(search?: string, language?: string): Promise<Course[]> {
     const query = this.repository.createQueryBuilder('course');
 
     if (search) {
       query.where('LOWER(course.title) LIKE LOWER(:search)', {
         search: `%${search}%`,
       });
+    }
+
+    if (language) {
+      query.andWhere('course.language = :language', { language });
     }
 
     return query.getMany();

@@ -16,7 +16,7 @@ export class CouponsController {
   @Roles('admin')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create a discount coupon' })
-  @ApiResponse({ status: 400, description: 'Bad request' })
+  @ApiResponse({ status: 400, description: 'Bad request - invalid coupon code format' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden' })
   @ApiResponse({ status: 404, description: 'Not found' })
@@ -49,7 +49,7 @@ export class CouponsController {
 
   @Post('validate')
   @ApiOperation({ summary: 'Validate a discount coupon' })
-  @ApiResponse({ status: 400, description: 'Bad request' })
+  @ApiResponse({ status: 400, description: 'Bad request - invalid coupon code format' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden' })
   @ApiResponse({ status: 404, description: 'Not found' })

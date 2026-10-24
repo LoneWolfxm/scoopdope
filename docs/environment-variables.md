@@ -40,6 +40,8 @@ Complete reference for all environment variables used across the scoopdope platf
 
 Variables are validated at startup by `apps/backend/src/config/validation.schema.ts` (Joi). Invalid or missing required values cause an immediate, descriptive error.
 
+Every variable listed here also appears in `apps/backend/.env.example` or `apps/frontend/.env.example` with an inline comment. CI enforces this: the `env-docs` job fails any pull request that adds a `process.env.*` reference without a matching `.env.example` entry.
+
 ---
 
 ## Backend Variables
@@ -65,8 +67,13 @@ Consumed by `apps/backend`. Set these in the root `.env` (or `apps/backend/.env`
 | `DATABASE_PASSWORD` | ✅ Required 🔒 | — | Password for `DATABASE_USER`. |
 | `DATABASE_NAME` | ✅ Required | — | Name of the database to connect to (default in Docker: `scoopdope`). |
 | `DATABASE_URL` | ⚙️ Optional | — | Full PostgreSQL connection string (e.g. `postgresql://user:pass@host:5432/db`). Used in CI security-scan jobs as a convenience alternative to the individual `DATABASE_*` variables. When set, individual variables are ignored by that job. |
+| `DB_POOL_MAX` | ⚙️ Optional | `20` | Maximum number of connections in the TypeORM connection pool. Increase for high-traffic deployments; keep the total across all backend instances below the PostgreSQL `max_connections` limit (leaving headroom for migrations and admin sessions). |
+| `DB_POOL_CONNECTION_TIMEOUT_MS` | ⚙️ Optional | `2000` | Milliseconds to wait for a free connection from the pool before failing with a timeout error. Raise only if the database is known to be slow to accept connections. |
+| `DB_POOL_IDLE_TIMEOUT_MS` | ⚙️ Optional | `30000` | Milliseconds an idle pooled connection is kept open before being released. Lower values free server-side connections faster; higher values reduce reconnect overhead. |
 
 > **Docker Compose note:** `docker-compose.yml` hard-codes `DATABASE_HOST=postgres`, `DATABASE_USER=scoopdope`, and `DATABASE_PASSWORD=scoopdope` for local development. Override these in `.env` for staging/production.
+
+> **Pool sizing guidance:** The pool defaults (`DB_POOL_MAX=20`) are sized for production workloads and are validated by a load test at 200 concurrent users. When scaling horizontally, size the pool per instance so that `DB_POOL_MAX × <number of backend instances>` stays comfortably below the database's `max_connections` (a common rule of thumb is to leave ~20% headroom). For example, with `max_connections=100` and 4 backend instances, set `DB_POOL_MAX=20`. Pool utilization is exported as a Prometheus metric so you can tune this value from real traffic data.
 
 ### Authentication
 
@@ -116,6 +123,8 @@ Consumed by `apps/backend`. Set these in the root `.env` (or `apps/backend/.env`
 | `EMAIL_PASS` | ✅ Required* 🔒 | — | SMTP authentication password or API key. *Required when `EMAIL_ENABLED=true`. |
 | `EMAIL_FROM` | ⚙️ Optional | `"Scoopdope" <no-reply@Scoopdope.app>` | Sender address shown in outgoing emails. Use RFC 5322 format. |
 | `FRONTEND_URL` | ⚙️ Optional | `http://localhost:3001` | Base URL of the frontend application. Embedded in email links (e.g. password-reset URLs). |
+| `EMAIL_VERIFICATION_TOKEN_TTL` | ⚙️ Optional | `86400` | Lifetime in seconds of email-verification tokens sent to new users. |
+| `PASSWORD_RESET_TOKEN_TTL` | ⚙️ Optional | `3600` | Lifetime in seconds of password-reset tokens embedded in reset emails. |
 
 ### Rate Limiting
 
@@ -123,19 +132,26 @@ Consumed by `apps/backend`. Set these in the root `.env` (or `apps/backend/.env`
 |----------|----------|---------|-------------|
 | `THROTTLE_TTL` | ⚙️ Optional | `60000` | Time window in milliseconds for the rate-limiter sliding window. |
 | `THROTTLE_LIMIT` | ⚙️ Optional | `100` | Maximum number of requests allowed per IP within `THROTTLE_TTL`. |
+| `THROTTLE_AUTH_TTL` | ⚙️ Optional | `60000` | Rate-limiter window in milliseconds applied to authentication endpoints (login, register, password reset). |
+| `THROTTLE_AUTH_LIMIT` | ⚙️ Optional | `10` | Maximum authentication requests allowed per IP within `THROTTLE_AUTH_TTL`. Keep this lower than `THROTTLE_LIMIT` to slow credential-stuffing attacks. |
 
 ### Monitoring & Observability
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `SENTRY_DSN` | ⚙️ Optional 🔒 | — | Sentry Data Source Name for backend error tracking. Obtain from your Sentry project settings. Leave empty to disable Sentry on the backend. |
+| `SENTRY_ENVIRONMENT` | ⚙️ Optional | `NODE_ENV` | Environment tag attached to Sentry events (e.g. `development`, `staging`, `production`). Defaults to the value of `NODE_ENV`. |
+| `SENTRY_TRACES_SAMPLE_RATE` | ⚙️ Optional | `1.0` (dev) / `0.1` (prod) | Fraction of transactions sent to Sentry for performance tracing. Must be between `0` and `1`. |
 | `GIT_COMMIT_SHA` | ⚙️ Optional | `unknown` | Git commit SHA injected at build time (set automatically in CI via `${{ github.sha }}`). Used as the Sentry release identifier for source-map linking. |
+| `HEALTH_CHECK_TIMEOUT_MS` | ⚙️ Optional | `5000` | Timeout in milliseconds for each dependency probe (database, Redis, Soroban RPC) performed by the `/health` endpoint. |
 
 ### KYC
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `KYC_PROVIDER_API_KEY` | ⚙️ Optional 🔒 | `""` | API key for the third-party KYC provider. Leave empty to disable KYC verification. |
+| `KYC_PROVIDER_URL` | ⚙️ Optional | `https://api.kyc-provider.example.com` | Base URL of the third-party KYC provider API. Override when using a sandbox or regional endpoint. |
+| `KYC_WEBHOOK_SECRET` | ⚙️ Optional 🔒 | `""` | Shared secret used to verify the signature of inbound KYC provider webhooks. Leave empty to reject all webhook callbacks. |
 
 ---
 
@@ -152,6 +168,8 @@ Consumed by `apps/frontend` (Next.js). Variables prefixed with `NEXT_PUBLIC_` ar
 | `NEXT_PUBLIC_SENTRY_DSN` | ⚙️ Optional | — | Sentry DSN for client-side and edge error tracking. Can be the same DSN as the backend or a separate project. Leave empty to disable. |
 | `NEXT_PUBLIC_GIT_COMMIT_SHA` | ⚙️ Optional | `unknown` | Git commit SHA for Sentry release tracking. Set automatically in CI. |
 | `NEXT_PUBLIC_SITE_URL` | ⚙️ Optional | — | Canonical public URL of the site. Used for sitemap generation (`next-sitemap`). |
+| `NEXT_PUBLIC_ENABLE_ANALYTICS` | ⚙️ Optional | `false` | Set to `true` to enable client-side product analytics. Disabled by default so local runs send no telemetry. |
+| `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | ⚙️ Optional | — | Google OAuth client ID used by the browser to start the Google sign-in flow. Must match the backend `GOOGLE_CLIENT_ID`. |
 | `PLAYWRIGHT_BASE_URL` | ⚙️ Optional | — | Base URL used by Playwright end-to-end tests. Defaults to `http://localhost:3001` in `playwright.config.ts`. |
 
 ---
@@ -190,6 +208,9 @@ DATABASE_PORT=5432
 DATABASE_USER=scoopdope
 DATABASE_PASSWORD=scoopdope
 DATABASE_NAME=scoopdope
+DB_POOL_MAX=20
+DB_POOL_CONNECTION_TIMEOUT_MS=2000
+DB_POOL_IDLE_TIMEOUT_MS=30000
 
 JWT_SECRET=dev-only-secret-change-in-production-32chars
 
@@ -213,7 +234,15 @@ THROTTLE_TTL=60000
 THROTTLE_LIMIT=1000
 
 SENTRY_DSN=
+SENTRY_ENVIRONMENT=development
+SENTRY_TRACES_SAMPLE_RATE=1.0
 GIT_COMMIT_SHA=local
+HEALTH_CHECK_TIMEOUT_MS=5000
+
+THROTTLE_AUTH_TTL=60000
+THROTTLE_AUTH_LIMIT=10
+EMAIL_VERIFICATION_TOKEN_TTL=86400
+PASSWORD_RESET_TOKEN_TTL=3600
 ```
 
 ```env
@@ -222,6 +251,9 @@ NEXT_PUBLIC_API_URL=http://localhost:3000
 NEXT_PUBLIC_STELLAR_NETWORK=testnet
 NEXT_PUBLIC_SENTRY_DSN=
 NEXT_PUBLIC_GIT_COMMIT_SHA=local
+NEXT_PUBLIC_SITE_URL=http://localhost:3001
+NEXT_PUBLIC_ENABLE_ANALYTICS=false
+NEXT_PUBLIC_GOOGLE_CLIENT_ID=
 ```
 
 ### Staging
@@ -238,6 +270,9 @@ DATABASE_PORT=5432
 DATABASE_USER=Scoopdope_staging
 DATABASE_PASSWORD=<strong-random-password>
 DATABASE_NAME=Scoopdope_staging
+DB_POOL_MAX=20
+DB_POOL_CONNECTION_TIMEOUT_MS=2000
+DB_POOL_IDLE_TIMEOUT_MS=30000
 
 JWT_SECRET=<random-32+-char-secret>
 
@@ -263,8 +298,13 @@ THROTTLE_TTL=60000
 THROTTLE_LIMIT=200
 
 SENTRY_DSN=https://<key>@sentry.io/<project>
+SENTRY_ENVIRONMENT=staging
+SENTRY_TRACES_SAMPLE_RATE=0.1
 GIT_COMMIT_SHA=<git-sha>
+HEALTH_CHECK_TIMEOUT_MS=5000
 KYC_PROVIDER_API_KEY=<staging-kyc-key>
+KYC_PROVIDER_URL=https://api.sandbox.kyc-provider.example.com
+KYC_WEBHOOK_SECRET=<staging-webhook-secret>
 ```
 
 ```env
@@ -274,6 +314,8 @@ NEXT_PUBLIC_STELLAR_NETWORK=testnet
 NEXT_PUBLIC_SENTRY_DSN=https://<key>@sentry.io/<project>
 NEXT_PUBLIC_GIT_COMMIT_SHA=<git-sha>
 NEXT_PUBLIC_SITE_URL=https://staging.scoopdope.example.com
+NEXT_PUBLIC_ENABLE_ANALYTICS=true
+NEXT_PUBLIC_GOOGLE_CLIENT_ID=<google-client-id>
 ```
 
 ### Production
@@ -288,6 +330,9 @@ DATABASE_PORT=5432
 DATABASE_USER=Scoopdope_prod
 DATABASE_PASSWORD=<strong-random-password>
 DATABASE_NAME=Scoopdope_prod
+DB_POOL_MAX=20
+DB_POOL_CONNECTION_TIMEOUT_MS=2000
+DB_POOL_IDLE_TIMEOUT_MS=30000
 
 JWT_SECRET=<random-64-char-secret>
 
@@ -313,8 +358,13 @@ THROTTLE_TTL=60000
 THROTTLE_LIMIT=100
 
 SENTRY_DSN=https://<key>@sentry.io/<project>
+SENTRY_ENVIRONMENT=production
+SENTRY_TRACES_SAMPLE_RATE=0.1
 GIT_COMMIT_SHA=<git-sha>
+HEALTH_CHECK_TIMEOUT_MS=5000
 KYC_PROVIDER_API_KEY=<production-kyc-key>
+KYC_PROVIDER_URL=https://api.kyc-provider.example.com
+KYC_WEBHOOK_SECRET=<production-webhook-secret>
 ```
 
 ```env
@@ -324,6 +374,8 @@ NEXT_PUBLIC_STELLAR_NETWORK=mainnet
 NEXT_PUBLIC_SENTRY_DSN=https://<key>@sentry.io/<project>
 NEXT_PUBLIC_GIT_COMMIT_SHA=<git-sha>
 NEXT_PUBLIC_SITE_URL=https://scoopdope.example.com
+NEXT_PUBLIC_ENABLE_ANALYTICS=true
+NEXT_PUBLIC_GOOGLE_CLIENT_ID=<google-client-id>
 ```
 
 ---
@@ -345,6 +397,7 @@ NEXT_PUBLIC_SITE_URL=https://scoopdope.example.com
 | `DATABASE_PASSWORD` | Full database access | Strong random password; restrict DB user permissions to the application schema only |
 | `EMAIL_PASS` | Sending email as your domain | Use API keys scoped to send-only; enable SPF/DKIM/DMARC |
 | `KYC_PROVIDER_API_KEY` | Access to user identity data | Scope to minimum required permissions; audit access logs |
+| `KYC_WEBHOOK_SECRET` | Forged KYC status callbacks could mark users as verified | Use a long random value; rotate on suspected compromise; verify signatures before trusting payloads |
 | `GOOGLE_CLIENT_SECRET` | OAuth impersonation | Restrict allowed redirect URIs in Google Cloud Console |
 
 ### `NEXT_PUBLIC_*` variables

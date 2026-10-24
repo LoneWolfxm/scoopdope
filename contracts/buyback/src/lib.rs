@@ -64,6 +64,8 @@ pub struct BuybackAnalytics {
 const BUYBACK_EXECUTED: Symbol = symbol_short!("buyback");
 const BUYBACK_TRIGGERED: Symbol = symbol_short!("trigger");
 const CONFIG_UPDATED: Symbol = symbol_short!("config_up");
+const BUYBACK_SCHEDULED: Symbol = symbol_short!("bb_sched");
+const BUYBACK_CANCELLED: Symbol = symbol_short!("bb_cncl");
 
 // =============================================================================
 // Contract
@@ -352,8 +354,46 @@ impl BuybackContract {
         env.storage().instance().set(&DataKey::BuybackHistoryCount, &(history_count + 1));
         env.storage().instance().set(&DataKey::LastBuybackLedger, &env.ledger().sequence());
 
-        env.events()
-            .publish((BUYBACK_EXECUTED, symbol_short!("amount")), (bst_to_buy, xlm_amount));
+        env.events().publish(
+            (BUYBACK_EXECUTED, symbol_short!("amount")),
+            (bst_to_buy, xlm_amount),
+        );
+        env.events().publish(
+            (BUYBACK_EXECUTED, symbol_short!("executed")),
+            (
+                history_count,
+                bst_to_buy,
+                xlm_amount,
+                bst_price,
+                record.trigger_reason.clone(),
+                record.ledger,
+                record.timestamp,
+            ),
+        );
+    }
+
+    fn emit_buyback_scheduled(
+        env: &Env,
+        scheduled_ledger: u32,
+        max_xlm_amount: i128,
+        bst_price: i128,
+        trigger_reason: Symbol,
+    ) {
+        env.events().publish(
+            (BUYBACK_SCHEDULED, symbol_short!("scheduled")),
+            (scheduled_ledger, max_xlm_amount, bst_price, trigger_reason),
+        );
+    }
+
+    fn emit_buyback_cancelled(
+        env: &Env,
+        scheduled_ledger: u32,
+        reason: Symbol,
+    ) {
+        env.events().publish(
+            (BUYBACK_CANCELLED, symbol_short!("cancelled")),
+            (scheduled_ledger, reason),
+        );
     }
 }
 
